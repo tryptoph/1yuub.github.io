@@ -102,21 +102,25 @@ const API = (() => {
     return getFallbackCVEs();
   }
   
-  // Fallback CVEs - actually recent from NVD website (no duplicates)
+  // Fallback CVEs - actually recent from NVD (verified latest)
   function getFallbackCVEs() {
-    const now = new Date();
     return [
+      // March 6, 2026
+      { id: 'CVE-2026-28485', description: 'OpenClaw fail to enforce mandatory authentication on /agent/act browser-control HTTP route', published: '2026-03-06T00:00:00.000Z', cvss: { score: 8.4, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
+      { id: 'CVE-2026-3383', description: 'ChaiScript up to 6.1.0 weakness in chaiscript::Boxed_Number::go function', published: '2026-03-06T00:00:00.000Z', cvss: { score: 6.5, severity: 'MEDIUM', vector: 'CVSS:3.1' }, type: 'cve' },
+      // March 5, 2026
+      { id: 'CVE-2026-26720', description: 'Twenty CRM v1.15.0 remote attacker execute arbitrary code via local.driver.ts module', published: '2026-03-05T00:00:00.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
+      { id: 'CVE-2026-27971', description: 'Qwik <=1.19.0 vulnerable to RCE due to unsafe deserialization in server$ RPC mechanism', published: '2026-03-05T00:00:00.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
+      { id: 'CVE-2026-27820', description: 'Buffer overflow vulnerability in Zlib::GzipReader in Ruby zlib gem', published: '2026-03-05T00:00:00.000Z', cvss: { score: 7.5, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
+      { id: 'CVE-2026-3336', description: 'Vulnerability in wren-lang wren up to 0.4.0 - out-of-bounds read', published: '2026-03-05T00:00:00.000Z', cvss: { score: 5.3, severity: 'MEDIUM', vector: 'CVSS:3.1' }, type: 'cve' },
       { id: 'CVE-2026-28546', description: 'Buffer overflow vulnerability in the scanning module', published: '2026-03-05T04:16:11.000Z', cvss: { score: 5.5, severity: 'MEDIUM', vector: 'CVSS:3.1' }, type: 'cve' },
       { id: 'CVE-2026-28547', description: 'Uninitialized pointer access vulnerability in scanning module', published: '2026-03-05T04:16:11.000Z', cvss: { score: 5.5, severity: 'MEDIUM', vector: 'CVSS:3.1' }, type: 'cve' },
       { id: 'CVE-2026-28552', description: 'Out-of-bounds write vulnerability in the IMS module', published: '2026-03-05T03:15:59.000Z', cvss: { score: 7.5, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-28545', description: 'Race condition vulnerability in the printing module', published: '2026-03-05T03:15:59.000Z', cvss: { score: 4.7, severity: 'MEDIUM', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-28544', description: 'Race condition vulnerability in the printing module', published: '2026-03-05T03:15:59.000Z', cvss: { score: 4.7, severity: 'MEDIUM', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-28543', description: 'Race condition vulnerability in the maintenance module', published: '2026-03-05T03:15:59.000Z', cvss: { score: 4.7, severity: 'MEDIUM', vector: 'CVSS:3.1' }, type: 'cve' },
+      // March 3, 2026
+      { id: 'CVE-2026-3136', description: 'Improper authorization vulnerability in Google Cloud Build Trigger Comment Control', published: '2026-03-03T12:16:19.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
       { id: 'CVE-2026-26892', description: 'Sourcecodester Logistic Hub Parcel Management System SQL Injection', published: '2026-03-03T15:16:49.000Z', cvss: { score: 7.2, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-3136', description: 'Improper authorization vulnerability in Google Cloud Build', published: '2026-03-03T12:16:19.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
+      // Older but critical
       { id: 'CVE-2026-1633', description: 'Synectix LAN 232 TRIO adapter unauthenticated web interface', published: '2026-02-04T00:16:08.000Z', cvss: { score: 10.0, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-25510', description: 'SolarWinds Serv-U SQL injection vulnerability', published: '2026-02-03T16:00:00.000Z', cvss: { score: 9.9, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-25150', description: 'Fortinet FortiOS SSL-VPN pre-authentication vulnerability', published: '2026-02-03T14:00:00.000Z', cvss: { score: 9.3, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
     ];
   }
 
