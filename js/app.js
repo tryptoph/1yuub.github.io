@@ -245,6 +245,9 @@
   function renderRansomware(victims) {
     const container = document.getElementById('ransomware-list');
     if (!container) return;
+
+    const badge = document.getElementById('malware-count-badge');
+    if (badge) badge.textContent = victims.length > 0 ? victims.length : '';
     
     if (!victims.length) {
       container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">⟩</div><div class="empty-state-text">No ransomware data</div></div>';
@@ -287,6 +290,9 @@
   function renderAPT(groups) {
     const container = document.getElementById('apt-list');
     if (!container) return;
+
+    const badge = document.getElementById('apt-count-badge');
+    if (badge) badge.textContent = groups.length > 0 ? groups.length : '';
     
     if (!groups.length) {
       container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">⟩</div><div class="empty-state-text">No APT data</div></div>';

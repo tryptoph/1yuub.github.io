@@ -334,7 +334,7 @@ const API = (() => {
       // Get recent commits — each contains new CVE IDs
       const commitsResp = await Promise.race([
         fetch(`${CVELIST_COMMITS_API}?per_page=30`),
-        timeout(12000)
+        timeout(8000)
       ]);
       if (!commitsResp.ok) throw new Error(`GitHub commits API: ${commitsResp.status}`);
       const commits = await commitsResp.json();
@@ -453,7 +453,7 @@ const API = (() => {
       const url = `${NVD_API}?${params.toString()}`;
       console.log('[API] Fetching from NVD:', url);
 
-      const response = await Promise.race([fetch(url), timeout(15000)]);
+      const response = await Promise.race([fetch(url), timeout(8000)]);
       if (!response.ok) throw new Error(`NVD API returned ${response.status}`);
 
       const data = await response.json();
@@ -497,82 +497,48 @@ const API = (() => {
 
   async function fetchCVEsFromCVEOrg(limit = 30) {
     try {
-      const since = new Date();
-      since.setDate(since.getDate() - 7);
-
-      const params = new URLSearchParams({
-        state: 'PUBLISHED',
-        'time_modified.gt': since.toISOString(),
-        count_only: ''
-      });
-
-      // First get count to verify API is responding
-      const countResp = await Promise.race([
-        fetch(`${CVEORG_API}?${params.toString()}`),
+      // CVE.org individual endpoint works; get IDs from cvelistV5 commits
+      const commitsResp = await Promise.race([
+        fetch(`${CVELIST_COMMITS_API}?per_page=15`),
         timeout(10000)
       ]);
-      if (!countResp.ok) throw new Error(`CVE.org API returned ${countResp.status}`);
+      if (!commitsResp.ok) throw new Error(`GitHub commits API: ${commitsResp.status}`);
+      const commits = await commitsResp.json();
 
-      // Now fetch actual CVE list
-      const listParams = new URLSearchParams({
-        state: 'PUBLISHED',
-        'time_modified.gt': since.toISOString(),
-        limit: String(Math.min(limit + 5, 50))
-      });
-
-      const listResp = await Promise.race([
-        fetch(`${CVEORG_API}?${listParams.toString()}`),
-        timeout(15000)
-      ]);
-      if (!listResp.ok) throw new Error(`CVE.org list API returned ${listResp.status}`);
-
-      const listData = await listResp.json();
-      const cveRecords = listData.cveRecords || listData.cves || listData;
-
-      if (!Array.isArray(cveRecords) || cveRecords.length === 0) {
-        // Fallback: API may return only IDs — fetch individually
-        const ids = (Array.isArray(listData) ? listData : [])
-          .map(item => item.cveId || item.cveMetadata?.cveId || (typeof item === 'string' ? item : null))
-          .filter(Boolean)
-          .slice(0, Math.min(limit + 5, 35));
-
-        if (ids.length === 0) throw new Error('No CVE records from CVE.org list');
-
-        console.log(`[API] CVE.org: fetching ${ids.length} individual CVEs`);
-        const results = await Promise.allSettled(
-          ids.map(id =>
-            Promise.race([fetch(`${CVEORG_API}/${id}`), timeout(5000)])
-              .then(r => r.ok ? r.json() : null)
-              .then(data => {
-                if (!data) return null;
-                const entry = mapCveListEntry(data);
-                if (entry) entry.source = 'cveorg';
-                return entry;
-              })
-          )
-        );
-
-        const cves = results
-          .filter(r => r.status === 'fulfilled' && r.value)
-          .map(r => r.value);
-
-        cves.sort((a, b) => new Date(b.published) - new Date(a.published));
-        console.log(`[API] CVE.org: got ${cves.length} CVEs (individual fetch)`);
-        return cves.length >= 3 ? cves.slice(0, limit) : null;
+      const cveIds = new Set();
+      for (const c of commits) {
+        const msg = c.commit?.message || '';
+        const newBlock = msg.match(/new CVEs?:\s*(CVE[\s\S]*?)(?:\n|$)/i);
+        if (newBlock) {
+          const ids = newBlock[1].match(/CVE-\d{4}-\d+/g) || [];
+          ids.forEach(id => cveIds.add(id));
+        }
       }
+      if (cveIds.size === 0) throw new Error('No CVE IDs found');
 
-      // Records returned inline — parse with mapCveListEntry
-      const mapped = cveRecords.map(record => {
-        try {
-          const entry = mapCveListEntry(record);
-          if (entry) entry.source = 'cveorg';
-          return entry;
-        } catch { return null; }
-      }).filter(Boolean);
+      const idsToFetch = [...cveIds].slice(0, Math.min(limit + 5, 30));
+      console.log(`[API] CVE.org: fetching ${idsToFetch.length} CVEs via official API`);
 
-      mapped.sort((a, b) => new Date(b.published) - new Date(a.published));
-      console.log(`[API] CVE.org: got ${mapped.length} CVEs`);
-      return mapped.length >= 3 ? mapped.slice(0, limit) : null;
+      const results = await Promise.allSettled(
+        idsToFetch.map(id =>
+          Promise.race([fetch(`${CVEORG_API}/${id}`), timeout(5000)])
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (!data) return null;
+              const entry = mapCveListEntry(data);
+              if (entry) entry.source = 'cveorg';
+              return entry;
+            })
+        )
+      );
+
+      const cves = results
+        .filter(r => r.status === 'fulfilled' && r.value)
+        .map(r => r.value);
+
+      cves.sort((a, b) => new Date(b.published) - new Date(a.published));
+      console.log(`[API] CVE.org: got ${cves.length} CVEs`);
+      return cves.length >= 3 ? cves.slice(0, limit) : null;
     } catch (err) {
       console.warn('[API] CVE.org fetch failed:', err.message);
       return null;
@@ -802,7 +768,7 @@ const API = (() => {
     for (const proxy of proxies) {
       try {
         const url = proxy(`${RANSOMWARE_LIVE_API}/recentvictims`);
-        const resp = await Promise.race([fetch(url), timeout(12000)]);
+        const resp = await Promise.race([fetch(url), timeout(8000)]);
         if (!resp.ok) continue;
         const data = await resp.json();
         if (!Array.isArray(data) || data.length === 0) continue;
@@ -845,15 +811,16 @@ const API = (() => {
   async function fetchURLhaus(limit = 30) {
     const apiUrl = 'https://urlhaus.abuse.ch/downloads/json_recent/';
     const proxies = [
-      url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
       url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
       url => url
     ];
 
     for (const proxy of proxies) {
       try {
         const url = proxy(apiUrl);
-        const resp = await Promise.race([fetch(url), timeout(15000)]);
+        const resp = await Promise.race([fetch(url), timeout(8000)]);
         if (!resp.ok) continue;
         const data = await resp.json();
         if (!data || typeof data !== 'object') continue;
@@ -903,7 +870,7 @@ const API = (() => {
     for (const proxy of proxies) {
       try {
         const url = proxy(apiUrl);
-        const resp = await Promise.race([fetch(url), timeout(15000)]);
+        const resp = await Promise.race([fetch(url), timeout(8000)]);
         if (!resp.ok) continue;
         const data = await resp.json();
         if (!data || typeof data !== 'object') continue;
@@ -955,7 +922,7 @@ const API = (() => {
     for (const proxy of proxies) {
       try {
         const url = proxy(apiUrl);
-        const resp = await Promise.race([fetch(url), timeout(12000)]);
+        const resp = await Promise.race([fetch(url), timeout(8000)]);
         if (!resp.ok) continue;
         const data = await resp.json();
         const items = data.data || data;
@@ -993,7 +960,7 @@ const API = (() => {
     try {
       const resp = await Promise.race([
         fetch(apiUrl, { headers: { 'User-Agent': 'CyberVulnDB/2.0' } }),
-        timeout(12000)
+        timeout(8000)
       ]);
       if (!resp.ok) throw new Error(`HIBP ${resp.status}`);
       const breaches = await resp.json();
@@ -1115,7 +1082,7 @@ const API = (() => {
     }
 
     try {
-      const res = await Promise.race([fetch(MISP_GALAXY_URL), timeout(15000)]);
+      const res = await Promise.race([fetch(MISP_GALAXY_URL), timeout(8000)]);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const values = data.values || [];
@@ -1246,8 +1213,8 @@ const API = (() => {
 
   // Main entry: load all data
   async function loadAllData() {
-    const CACHE_KEY = 'cybervulndb_data_v5';
-    const CACHE_TS_KEY = 'cybervulndb_ts_v5';
+    const CACHE_KEY = 'cybervulndb_data_v7';
+    const CACHE_TS_KEY = 'cybervulndb_ts_v7';
     const CACHE_MAX_AGE = 15 * 60 * 1000; // 15 minutes
 
     const cachedTs = Utils.storageGet(CACHE_TS_KEY);
@@ -1262,20 +1229,22 @@ const API = (() => {
     console.log('[API] Loading fresh data...');
     
     // Load data with resilient fallbacks — all live sources in parallel
-    const [cves, ransomware, news] = await Promise.all([
+    // Wrap slow sources with overall timeouts to prevent blocking
+    const [cves, ransomware, news, apt] = await Promise.all([
       fetchAllCVESources(30),
-      fetchAllMalwareSources(50),
+      Promise.race([
+        fetchAllMalwareSources(50),
+        timeout(30000).catch(() => getMockRansomware())
+      ]),
       Promise.race([
         fetchAllNews().catch(() => []),
         timeout(20000).catch(() => [])
+      ]),
+      Promise.race([
+        fetchAllAPTSources(50),
+        timeout(25000).catch(() => getMockAPT())
       ])
     ]);
-    let apt;
-    try {
-      apt = await fetchAllAPTSources(50);
-    } catch (e) {
-      apt = getMockAPT();
-    }
 
     // EPSS enrichment (fetchAllCVESources already enriches, but ensure coverage)
     await enrichWithEPSS(cves);

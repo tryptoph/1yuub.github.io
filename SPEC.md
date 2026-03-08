@@ -1,407 +1,522 @@
-# CyberVulnDB - Cybersecurity Intelligence Dashboard
+# CyberVulnDB — Cybersecurity Intelligence Dashboard
 
 ## Project Overview
 
 **Project Name:** CyberVulnDB  
-**Type:** Real-time Cybersecurity Intelligence Dashboard (Web Application)  
-**Current Implementation:** Vanilla JavaScript (originally planned as Next.js)
-**Core Functionality:** CVE tracking, ransomware monitoring, APT intelligence, security news aggregation, and threat visualization
-**Target Users:** Security analysts, vulnerability researchers, SOC teams, CTI analysts
+**Version:** 2.0.0  
+**Type:** Real-time Cybersecurity Intelligence Dashboard (Browser-only Web Application)  
+**Stack:** Vanilla JavaScript, Leaflet.js, CSS3  
+**Core Functionality:** Multi-source CVE tracking, ransomware/malware monitoring, APT group intelligence, security news aggregation, and global threat map visualization  
+**Target Users:** Security analysts, vulnerability researchers, SOC teams, CTI analysts, threat intelligence researchers  
+**Design:** Terminal-inspired cyber aesthetic with dark theme
 
 ---
 
-## Implementation History
+## Architecture
 
-### Original Plan (from SPEC.md v1)
-- **Stack:** Next.js 14+ with TypeScript, React 18+
-- **Styling:** CSS Modules with CSS Variables
-- **State Management:** Zustand
-- **Maps:** globe.gl + Three.js (3D), deck.gl + MapLibre (2D)
-- **AI:** Ollama (local) / Groq (cloud) / Transformers.js fallback
+### Tech Stack
+- **Frontend:** Vanilla JavaScript (ES6+ IIFE modules, no framework)
+- **Styling:** Custom CSS with CSS custom properties (dark theme)
+- **Maps:** Leaflet.js with CartoDB dark tiles
+- **Fonts:** IBM Plex Mono (mono) + Space Grotesk (display)
+- **Data:** 100% client-side — all APIs called directly from browser
+- **CORS Strategy:** Direct calls where possible, 3-tier proxy fallback chain (rss2json → allorigins → corsproxy)
 
-### What Was Actually Built
-- **Stack:** Vanilla JavaScript (no framework)
-- **Styling:** Custom CSS with CSS Variables
-- **Maps:** Leaflet.js with OpenStreetMap/CartoDB tiles
-- **Data:** NVD API 2.0, fallback static data, mock ransomware/APT data
-
----
-
-## Current Project Structure
-
+### Project Structure
 ```
 cybervulndb/
-├── index.html              # Main HTML entry point
+├── index.html              # App shell — panels, map, modals, dropdowns
 ├── css/
-│   └── style.css          # All styles (terminal-inspired cyber aesthetic)
+│   └── style.css           # All styles (~1500 lines, terminal cyber theme)
 ├── js/
-│   ├── app.js             # Main application logic (render, events, init)
-│   ├── api.js             # API clients (NVD, RSS, fallback data)
-│   ├── map.js             # Leaflet map management
-│   ├── ui.js              # UI interactions (toast, loading, export)
-│   └── utils.js           # Utility functions (storage, formatting)
+│   ├── app.js              # Main logic — render, events, filters, refresh loops
+│   ├── api.js              # All API fetchers, data mapping, caching
+│   ├── map.js              # Leaflet map management, markers, popups
+│   ├── ui.js               # Toast, loading, export, modal helpers
+│   └── utils.js            # Storage, formatting utilities
 ├── lib/
-│   ├── leaflet.js         # Map library
-│   └── leaflet.css        # Map styles
-└── SPEC.md                # This specification
+│   ├── leaflet.js          # Map library (vendored)
+│   └── leaflet.css         # Map styles (vendored)
+├── data/
+│   └── countries.json      # Country geometry for map
+├── test_app.py             # Playwright automated tests (6 checks)
+└── SPEC.md                 # This specification
 ```
 
 ---
 
-## Features Implemented
+## Current State (v1.x — What's Working)
 
-### ✅ Working Features
+### ✅ Implemented & Verified
+- **CVE Panel:** 3 sources (cvelistV5 real-time, GitHub Advisory, NVD) with source selector dropdown, severity filter, auto-refresh every 2 min, NEW badges, precise time-ago display
+- **Ransomware Panel:** Live data from ransomware.live (50 recent victims), group/country/industry display
+- **APT Panel:** 15 enriched groups with MITRE ATT&CK data (static, hardcoded)
+- **News Panel:** 60+ articles from 10 RSS feeds via proxy chain + HackerNews Algolia API, auto-refresh every 3 min, category filter
+- **Threat Map:** Leaflet with markers for all threat types, popups, reset view
+- **Search:** Cross-panel full-text search
+- **Export:** JSON export of all loaded data
+- **UI:** Terminal aesthetic, scanline overlay, severity colors, toast notifications, loading states, responsive layout
 
-1. **CVE Tracking**
-   - Fetches from NVD API 2.0
-   - Fallback static data with recent CVEs
-   - Severity filter dropdown (CRITICAL/HIGH/MEDIUM/LOW)
-   - Sort by date (newest first)
-   - Click to view CVE details in modal
-
-2. **Ransomware Monitor**
-   - Mock data for ransomware victims
-   - Group, country, sector display
-   - Click to view details in modal
-
-3. **APT Intelligence**
-   - Mock data for APT groups
-   - Aliases, country, target sectors
-   - Click to view details in modal
-
-4. **Security News**
-   - RSS feed fetching (with CORS proxy)
-   - Category filtering
-   - Opens in new tab
-
-5. **Threat Map**
-   - Leaflet.js map
-   - Markers for CVEs, ransomware, APT
-   - Popup details on click
-   - Reset view button
-
-6. **Auto-Refresh**
-   - Data refreshes every 5 minutes
-   - Manual refresh button
-
-7. **Search**
-   - Search across CVEs, ransomware, APT, news
-
-8. **Export**
-   - Export data as JSON
-
-9. **UI/UX**
-   - Terminal-inspired cyber aesthetic
-   - IBM Plex Mono + Space Grotesk fonts
-   - Scanline overlay effect
-   - Dark theme with cyan accents
-   - Severity color coding
-   - Responsive design
-   - Toast notifications
+### 🟡 Current Limitations
+- CVE is the only panel with a data source selector dropdown
+- Ransomware panel has only 1 source (ransomware.live)
+- APT panel is hardcoded (no live API)
+- News panel has no source selector (fetches all feeds)
+- No severity categorization per CVE source
+- No statistics dashboard or summary cards
+- No EPSS exploit prediction enrichment
+- No IOC/malware indicator feeds
 
 ---
 
-## Current Issues (Bugs to Fix)
+## v2.0 Enhancement Specification
 
-### 🔴 Critical Issues
-
-1. **CVEs Not Rendering in UI**
-   - Status: NVD API returns data but render function not executing properly
-   - Console shows: `[API] Fetched 20 CVEs from NVD` but `window.cyberData` is null
-   - Issue: Async/await problem in `renderCVEs()` function - it's now async but the caller isn't awaiting properly
-
-2. **Click Handlers Not Working**
-   - CVE cards not clickable to open modal
-   - Likely related to the async rendering issue
-
-### 🟡 Known Limitations
-
-1. **NVD API Reliability**
-   - Sometimes returns old CVEs instead of latest
-   - Fallback data is used as backup
-
-2. **RSS Feeds**
-   - Many feeds fail due to CORS
-   - Limited to working feeds only
-
-3. **Map Markers**
-   - CVE coordinates are estimated from description text
-   - Not all CVEs have location data
+### Goals
+1. **10 data sources per category** — CVE, Malware/Ransomware, APT, News
+2. **Source selector dropdown on every panel** with "All Sources" as default
+3. **Severity filtering per CVE data source**
+4. **Auto-fetch from all sources** — parallel loading, newest-first ordering
+5. **Enhanced design** — statistics bar, improved cards, source badges, better animations
 
 ---
 
-## Data Sources
+## Data Sources — 10 Per Category
 
-### CVE Data
-- **Primary:** NVD API 2.0 (`https://services.nvd.nist.gov/rest/json/cves/2.0`)
-- **Fallback:** Static JSON with verified recent CVEs
-- **KEV:** CISA KEV Catalog (planned)
+### 1. CVE / Vulnerability Sources
 
-### Ransomware Data
-- **Current:** Mock data (static JSON)
-- **Planned:** RansomDB API, ransomware group leak sites
+| # | Source | API Endpoint | CORS | Auth | Freshness | Severity Data |
+|---|--------|-------------|------|------|-----------|---------------|
+| 1 | **CVEProject (cvelistV5)** | `api.github.com/repos/CVEProject/cvelistV5/commits` → `raw.githubusercontent.com` individual JSON | ✅ | None | **Real-time** (0 lag) | CVSSv4 + CVSSv3.1 |
+| 2 | **GitHub Advisory DB** | `api.github.com/advisories?type=reviewed&sort=published` | ✅ | None | ~1 day | CVSS from advisory |
+| 3 | **NVD (NIST)** | `services.nvd.nist.gov/rest/json/cves/2.0` | ✅ | None (rate-limited) | ~5-7 days | CVSSv3.1 + CVSSv2 |
+| 4 | **CVE.org (MITRE)** | `cveawg.mitre.org/api/cve?state=PUBLISHED&time_modified.gt={date}` | ✅ | None | **Real-time** | CVSSv4 + CVSSv3.1 |
+| 5 | **OSV.dev (Google)** | `api.osv.dev/v1/query` (POST, query by ecosystem) | ❌ proxy | None | Real-time | CVSS from DB |
+| 6 | **CISA KEV** | `cisa.gov/.../known_exploited_vulnerabilities.json` | ❌ proxy | None | Daily | N/A (all are exploited) |
+| 7 | **EPSS (FIRST.org)** | `api.first.org/data/v1/epss?cve={id}` | ✅ | None | Daily | Exploit probability score |
+| 8 | **Exploit-DB** | `gitlab.com/api/v4/projects/exploit-database%2Fexploitdb/repository/commits` | ✅ | None | Daily | N/A (has exploit code) |
+| 9 | **Packet Storm** | RSS: `packetstormsecurity.com/feeds/` | ❌ proxy | None | Daily | N/A |
+| 10 | **VulnCheck (Community)** | RSS/JSON feed from vulncheck.com community | ❌ proxy | Free key | Daily | CVSS provided |
 
-### APT Data
-- **Current:** Mock data (static JSON)
-- **Planned:** MITRE ATT&CK API
+**Implementation Notes:**
+- **Default:** "All Sources (Merged)" — fetches from sources 1-4 in parallel (fastest, most reliable), deduplicates by CVE ID, sorts newest first, shows 30 results
+- **EPSS enrichment:** After loading CVEs from any source, batch-query EPSS scores and overlay as exploit probability badges
+- **CISA KEV enrichment:** Cross-reference loaded CVEs against KEV catalog, add "🔥 Exploited" badge
+- **Severity per source:** Each source returns its own CVSS data; when merging "All Sources", prefer CVSSv4 > CVSSv3.1 > CVSSv2, take highest score if conflict
+- **Rate limiting:** GitHub API = 60 req/hr unauthenticated; NVD = 6 req/sec; CVE.org = generous but undocumented
 
-### News Data
-- **Current:** RSS feeds via CORS proxy
-- **Planned:** Add more reliable feeds
+### 2. Malware / Ransomware Sources
 
----
+| # | Source | API Endpoint | CORS | Auth | Data Type |
+|---|--------|-------------|------|------|-----------|
+| 1 | **ransomware.live (Victims)** | `api.ransomware.live/v1/recentvictims` | ❌ proxy | None | Recent ransomware victims (org, group, country) |
+| 2 | **ransomware.live (Groups)** | `api.ransomware.live/v1/groups` | ❌ proxy | None | 324 ransomware group profiles |
+| 3 | **URLhaus (Abuse.ch)** | `urlhaus.abuse.ch/downloads/json_recent/` | ❌ proxy | None | Malicious URLs (malware distribution) |
+| 4 | **ThreatFox (Abuse.ch)** | `threatfox.abuse.ch/export/json/recent/` | ❌ proxy | None | IOCs — domains, IPs, hashes linked to malware |
+| 5 | **Feodo Tracker (Abuse.ch)** | `feodotracker.abuse.ch/downloads/ipblocklist.json` | ❌ proxy | None | Botnet C2 server IPs (Dridex, Emotet, TrickBot) |
+| 6 | **MalwareBazaar (Abuse.ch)** | `bazaar.abuse.ch/export/csv/recent/` | ❌ proxy | None | Recent malware samples (hashes, family, tags) |
+| 7 | **InQuest Labs** | `labs.inquest.net/api/iocdb/list?limit=50` | ✅ | None | IOC database (hashes, YARA rules, references) |
+| 8 | **Have I Been Pwned** | `haveibeenpwned.com/api/v3/breaches` | ✅ | None | 600+ data breaches (org, date, count, data types) |
+| 9 | **Malware Traffic Analysis** | RSS: `malware-traffic-analysis.net/blog-entries.rss` | ❌ proxy | None | Malware traffic analysis blog posts with IOCs |
+| 10 | **ANY.RUN (Public)** | RSS: `any.run/malware-trends/` or public task feed | ❌ proxy | None | Public malware sandbox submissions & trends |
 
-## UI/UX Specification (Current)
+**Implementation Notes:**
+- **Default:** "All Sources (Merged)" — fetches sources 1, 3, 4, 7 in parallel (fastest), merges by type
+- **Card design:** Unified malware card showing: threat name, type (ransomware/trojan/phishing/botnet/IOC), source badge, time-ago, severity indicator
+- **Deduplication:** By IOC value (URL/hash/IP) across sources
+- **Country mapping:** ransomware.live provides country codes; URLhaus provides ASN/country; ThreatFox provides reporter country
 
-### Color Palette (Terminal Cyber Theme)
-```css
-:root {
-  /* Backgrounds */
-  --bg-primary: #050508;
-  --bg-secondary: #0a0c10;
-  --bg-card: #0d1018;
-  --bg-elevated: #12161f;
-  
-  /* Text */
-  --text-primary: #e4e4e7;
-  --text-secondary: #9ca3af;
-  --text-muted: #52525b;
-  
-  /* Accents */
-  --accent-cyan: #00ffd5;
-  --accent-green: #39ff14;
-  --accent-red: #ff2d55;
-  
-  /* Severity */
-  --critical: #ff2d55;
-  --high: #ff9500;
-  --medium: #ffcc00;
-  --low: #30d158;
-  --info: #64d2ff;
-  
-  /* Threat Types */
-  --ransomware: #ff375f;
-  --apt: #bf5af2;
-  --cve: #ffcc00;
-}
-```
+### 3. APT / Threat Actor Sources
 
-### Typography
-- **Primary Font:** IBM Plex Mono (monospace)
-- **Display Font:** Space Grotesk (headings)
+| # | Source | API Endpoint | CORS | Auth | Data Type |
+|---|--------|-------------|------|------|-----------|
+| 1 | **MISP Galaxy** | `raw.githubusercontent.com/MISP/misp-galaxy/main/clusters/threat-actor.json` | ✅ | None | **953 threat actors** with aliases, country, refs, description |
+| 2 | **MITRE ATT&CK (STIX)** | `raw.githubusercontent.com/mitre/cti/master/enterprise-attack/intrusion-set/` or STIX bundle | ✅ | None | Intrusion sets with techniques, software, campaigns |
+| 3 | **AlienVault OTX** | `otx.alienvault.com/api/v1/pulses/activity` | ❌ proxy | Free key | Threat pulses, IOCs, targeted countries |
+| 4 | **Malpedia** | `malpedia.caad.fkie.fraunhofer.de/api/list/actors` | ❌ proxy | Free key | APT actor profiles with malware families |
+| 5 | **MISP Galaxy (Countries)** | `raw.githubusercontent.com/MISP/misp-galaxy/main/clusters/country.json` | ✅ | None | Country-to-actor mapping |
+| 6 | **ETDA/ThaiCERT** | `apt.etda.or.th/cgi-bin/listgroups.cgi` | ❌ proxy | None | APT group encyclopedia |
+| 7 | **APTnotes** | `raw.githubusercontent.com/aptnotes/data/master/APTnotes.json` | ✅ | None | APT research papers & reports archive |
+| 8 | **Mandiant Blog** | RSS: `mandiant.com/resources/blog/rss.xml` | ❌ proxy | None | APT campaign reports |
+| 9 | **CrowdStrike Blog** | RSS: `crowdstrike.com/blog/feed/` | ❌ proxy | None | Adversary reports (FANCY BEAR, etc.) |
+| 10 | **Kaspersky Securelist** | RSS: `securelist.com/feed/` | ❌ proxy | None | APT campaign analysis |
 
-### Layout
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ HEADER: Logo | Search Bar | Refresh | Export                    │
-├────────────┬────────────────────────────────────────────────────┤
-│            │                                                     │
-│  SIDEBAR   │                   MAP                             │
-│            │                                                     │
-│ [CVE]      │         (Leaflet Interactive Map)                  │
-│ [RANSOM]   │                                                     │
-│ [NEWS]     │                                                     │
-│ [APT]      │                                                     │
-│            │                                                     │
-├────────────┴────────────────────────────────────────────────────┤
-│ FOOTER: Status | Last Updated | Threat Count                   │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Implementation Notes:**
+- **Default:** "All Sources (Merged)" — loads MISP Galaxy (953 actors) as primary comprehensive database, enriches with MITRE ATT&CK techniques
+- **MISP Galaxy is the star:** 953 actors with countries, aliases, references — replaces the hardcoded 15 actors entirely
+- **Sorting:** By last-modified date (if available) or alphabetically; highlight actors with recent campaign activity from RSS sources
+- **Actor cards:** Name, aliases, country flag, known malware, target sectors, number of references, last active date
+- **Search:** Full-text search across all actor names, aliases, descriptions
 
-### Components
-- Tab navigation for sidebar panels
-- Threat cards with severity badges
-- Modal dialogs for details
-- Toast notifications
-- Loading overlay
-- Map legend
+### 4. Security News Sources
 
----
+| # | Source | API / Feed URL | CORS | Auth | Focus |
+|---|--------|---------------|------|------|-------|
+| 1 | **The Hacker News** | RSS: `feeds.feedburner.com/TheHackersNews` | ❌ proxy | None | Breaking cybersecurity news |
+| 2 | **BleepingComputer** | RSS: `bleepingcomputer.com/feed/` | ❌ proxy | None | Malware, vulnerabilities, tech news |
+| 3 | **Krebs on Security** | RSS: `krebsonsecurity.com/feed/` | ❌ proxy | None | Investigative cybersecurity journalism |
+| 4 | **Dark Reading** | RSS: `darkreading.com/rss.xml` | ❌ proxy | None | Enterprise security news |
+| 5 | **SecurityWeek** | RSS: `securityweek.com/feed/` | ❌ proxy | None | Security industry news |
+| 6 | **SANS ISC** | RSS: `isc.sans.edu/rssfeed.xml` | ❌ proxy | None | Internet Storm Center diaries |
+| 7 | **Schneier on Security** | RSS: `schneier.com/feed/atom/` | ❌ proxy | None | Security analysis & opinion |
+| 8 | **Malwarebytes Blog** | RSS: `blog.malwarebytes.com/feed/` | ❌ proxy | None | Malware research |
+| 9 | **Threatpost** | RSS: `threatpost.com/feed/` | ❌ proxy | None | Threat intelligence news |
+| 10 | **HackerNews (Algolia)** | API: `hn.algolia.com/api/v1/search_by_date?query=security+vulnerability&tags=story` | ✅ | None | Community-curated tech/security stories |
 
-## What's Been Done (Detailed)
-
-### Phase 1: Basic Setup
-- ✅ Created vanilla JS project structure
-- ✅ Set up HTML with semantic structure
-- ✅ Created CSS with cyber theme
-- ✅ Integrated Leaflet.js map
-
-### Phase 2: API Integration
-- ✅ NVD API client with caching
-- ✅ Fallback data for CVEs
-- ✅ Mock data for ransomware/APT
-- ✅ RSS feed fetching with CORS proxy
-
-### Phase 3: UI Features
-- ✅ Tab navigation
-- ✅ Severity filtering
-- ✅ Search functionality
-- ✅ Modal system
-- ✅ Toast notifications
-- ✅ Export feature
-
-### Phase 4: Visual Design
-- ✅ Terminal-inspired aesthetic
-- ✅ Custom color palette
-- ✅ Animations and transitions
-- ✅ Responsive design
-
-### Phase 5: Bug Fixes (In Progress)
-- 🔄 Fixed async/await in renderCVEs
-- 🔄 Added auto-refresh interval
-- 🔄 Fixed modal close functionality
-- 🔄 Added z-index fixes for clickable elements
+**Implementation Notes:**
+- **Default:** "All Sources" — fetches from all 10 in parallel via proxy chain, deduplicates by normalized URL
+- **Already working:** All 10 sources are currently implemented and verified
+- **Proxy chain:** rss2json.com → allorigins.win → corsproxy.io (3-tier fallback per feed)
+- **Category auto-detection:** Classify articles by keyword matching (vulnerabilities, breaches, malware, ransomware, APT, policy)
+- **Source badge:** Each news card shows which outlet it came from
 
 ---
 
-## What Still Needs to Be Done
+## Source Selector Dropdowns — All Panels
 
-### Immediate Priorities
-1. **Fix CVE rendering** - Ensure CVEs display in the sidebar
-2. **Fix click handlers** - Make CVE cards open modal on click
-3. **Verify auto-refresh** - Confirm data refreshes every 5 minutes
+### Dropdown Specification
 
-### Short-term Features
-4. **CISA KEV Integration** - Add known exploited vulnerabilities indicator
-5. **Better fallback data** - More comprehensive static CVE data
-6. **Improved RSS feeds** - Find more reliable CORS-enabled feeds
-7. **Map improvements** - Better marker clustering, heatmap layer
+Every panel gets a `<select>` source selector in its panel header:
 
-### Medium-term Features
-8. **EPSS Scoring** - Add Exploit Prediction Scoring System data
-9. **More ransomware data** - Real API integration
-10. **APT technique matrix** - MITRE ATT&CK visualization
+```html
+<!-- CVE Panel Header -->
+<select id="cve-source-filter" title="CVE data source">
+  <option value="all" selected>All Sources (Merged)</option>
+  <option value="cvelist">CVEProject (Real-time)</option>
+  <option value="github">GitHub Advisory</option>
+  <option value="nvd">NVD (NIST)</option>
+  <option value="cveorg">CVE.org (MITRE)</option>
+  <option value="osv">OSV.dev (Google)</option>
+  <option value="kev">CISA KEV (Exploited)</option>
+  <option value="exploitdb">Exploit-DB</option>
+  <option value="packetstorm">Packet Storm</option>
+  <option value="vulncheck">VulnCheck</option>
+</select>
 
-### Long-term Features (Original Spec)
-11. **AI Summaries** - Ollama/Groq integration for threat briefs
-12. **3D Globe** - Upgrade from Leaflet to globe.gl
-13. **User preferences** - Theme toggle, custom feeds
+<!-- Malware Panel Header -->
+<select id="malware-source-filter" title="Malware data source">
+  <option value="all" selected>All Sources (Merged)</option>
+  <option value="ransomware-victims">Ransomware Victims</option>
+  <option value="ransomware-groups">Ransomware Groups</option>
+  <option value="urlhaus">URLhaus (Malicious URLs)</option>
+  <option value="threatfox">ThreatFox (IOCs)</option>
+  <option value="feodo">Feodo Tracker (Botnets)</option>
+  <option value="bazaar">MalwareBazaar (Samples)</option>
+  <option value="inquest">InQuest Labs (IOCs)</option>
+  <option value="phishtank">PhishTank (Phishing)</option>
+  <option value="maltraffic">Malware Traffic Analysis</option>
+  <option value="anyrun">ANY.RUN (Sandboxes)</option>
+</select>
+
+<!-- APT Panel Header -->
+<select id="apt-source-filter" title="APT data source">
+  <option value="all" selected>All Sources (Merged)</option>
+  <option value="misp">MISP Galaxy (953 actors)</option>
+  <option value="mitre">MITRE ATT&CK</option>
+  <option value="otx">AlienVault OTX</option>
+  <option value="malpedia">Malpedia</option>
+  <option value="misp-country">MISP (By Country)</option>
+  <option value="etda">ThaiCERT/ETDA</option>
+  <option value="aptnotes">APTnotes (Papers)</option>
+  <option value="mandiant">Mandiant Blog</option>
+  <option value="crowdstrike">CrowdStrike Blog</option>
+  <option value="securelist">Kaspersky Securelist</option>
+</select>
+
+<!-- News Panel Header -->
+<select id="news-source-filter" title="News source">
+  <option value="all" selected>All Sources</option>
+  <option value="hackernews-rss">The Hacker News</option>
+  <option value="bleeping">BleepingComputer</option>
+  <option value="krebs">Krebs on Security</option>
+  <option value="darkreading">Dark Reading</option>
+  <option value="securityweek">SecurityWeek</option>
+  <option value="sans">SANS ISC</option>
+  <option value="schneier">Schneier</option>
+  <option value="malwarebytes">Malwarebytes</option>
+  <option value="threatpost">Threatpost</option>
+  <option value="hn-algolia">HackerNews (Community)</option>
+</select>
+```
+
+### Dropdown Behavior
+- **Default:** "All Sources (Merged)" is selected on every panel
+- **On change:** Show loading spinner, fetch from selected source, render results sorted newest-first
+- **Count badge:** Tab shows total item count (updates on source change)
+- **Toast notification:** "Loaded {N} items from {source}" on each fetch
+- **Memory:** Store last-selected source in `localStorage` per panel
 
 ---
 
-## API Specifications
+## Severity Filtering Per CVE Source
 
-### NVD API 2.0
+### How Severity Works Across Sources
+
+| Source | Severity Data Available | Mapping |
+|--------|------------------------|---------|
+| cvelistV5 | CVSSv4 baseScore + CVSSv3.1 | Map score → CRITICAL/HIGH/MEDIUM/LOW |
+| GitHub Advisory | `severity` field (critical/high/moderate/low) | Direct mapping |
+| NVD | CVSSv3.1 metrics in `impact` | Standard CVSS ranges |
+| CVE.org | CVSSv4 + CVSSv3.1 in `containers.cna.metrics` | Same as cvelistV5 |
+| OSV.dev | `severity` array with CVSS vectors | Parse CVSS vector string |
+| CISA KEV | No CVSS (all are critical by nature) | Default to CRITICAL |
+| EPSS | Probability score 0-1 | Overlay enrichment, not severity |
+| Exploit-DB | No CVSS | Marked as "EXPLOIT" type |
+| Packet Storm | No CVSS | Unscored |
+| VulnCheck | CVSS provided | Standard mapping |
+
+### CVSS Score → Severity Mapping
 ```
-GET https://services.nvd.nist.gov/rest/json/cves/2.0
-Parameters:
-  - pubStartDate: ISO 8601
-  - pubEndDate: ISO 8601
-  - cvssV3Severity: CRITICAL|HIGH|MEDIUM|LOW
-  - resultsPerPage: number (1-2000)
-Rate Limit: 6 requests per second
+CRITICAL: score >= 9.0
+HIGH:     score >= 7.0
+MEDIUM:   score >= 4.0
+LOW:      score >  0.0
+NONE:     score == 0 or missing
 ```
 
-### CISA KEV Catalog
-```
-GET https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
-```
-
-### RSS Feeds (Working)
-- The Hacker News: `https://feeds.feedburner.com/TheHackersNews`
-- Krebs on Security: `https://krebsonsecurity.com/feed/`
+### Merged Severity Resolution
+When "All Sources" is selected and a CVE appears in multiple sources:
+1. Prefer CVSSv4 score over CVSSv3.1 over CVSSv2
+2. If same version, take the higher score
+3. Add source indicator showing which sources have this CVE
 
 ---
 
-## Data Models
+## Auto-Fetch & Refresh Strategy
 
-### CVE
+### Initial Load
+```
+Page load → Promise.all([
+  fetchAllCVESources()     // 4 primary CVE APIs in parallel
+  fetchAllMalware()        // ransomware.live + URLhaus + ThreatFox + InQuest
+  fetchAllAPT()            // MISP Galaxy (primary) + enrichment
+  fetchAllNews()           // 10 RSS feeds in parallel via proxy chain
+])
+→ Render all panels
+→ Plot map markers
+→ Start refresh timers
+```
+
+### Refresh Intervals
+| Category | Refresh Interval | Strategy |
+|----------|-----------------|----------|
+| CVE | Every 2 minutes | Fetch from primary source (cvelistV5), check for new IDs, show NEW badge |
+| Malware | Every 3 minutes | Fetch ransomware.live victims + URLhaus recent |
+| APT | Every 30 minutes | MISP Galaxy rarely changes; RSS feeds for latest reports |
+| News | Every 3 minutes | Fetch all RSS feeds, deduplicate, prepend new items |
+
+### Caching
+- **localStorage cache:** 15-minute TTL for full dataset, keyed by version (`cybervulndb_data_v{N}`)
+- **Per-source cache:** Individual source results cached separately for faster source switching
+- **Cache invalidation:** Bump version key when source list changes; clear on manual refresh
+
+---
+
+## Design Enhancements (v2.0)
+
+### 1. Statistics Bar (New)
+Add a horizontal stats bar between header and main content:
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  ⚡ 95 CVEs  │  ⚠ 50 Attacks  │  ◎ 953 APT Groups  │  ◉ 60 News  │
+│  12 CRITICAL  │  8 Countries   │  15 Active          │  3 min ago   │
+└──────────────────────────────────────────────────────────────────┘
+```
+- Animated counters on initial load
+- Click a stat to switch to that panel
+- Severity mini-bar under CVE count (colored segments for CRIT/HIGH/MED/LOW)
+
+### 2. Source Badges on Cards
+Every threat card shows a small source badge:
+```
+┌─────────────────────────────────────────┐
+│ [CVE] [cvelistV5]              2h ago   │
+│ CVE-2026-3741 — YiFang CMS 2.0.5...   │
+│ ████ MEDIUM 5.1  │  EPSS: 23%          │
+└─────────────────────────────────────────┘
+```
+- Source badge color-coded per provider
+- EPSS probability shown as percentage when available
+- "🔥 KEV" badge if in CISA Known Exploited list
+
+### 3. Enhanced Card Design
+- **Glassmorphism effect:** Subtle frosted glass on hover
+- **Source color stripe:** Left border color matches source provider
+- **Expandable preview:** Click to expand inline before opening modal
+- **Severity gradient:** Background gradient intensity based on severity
+- **Pulse animation:** Cards with CRITICAL severity pulse gently
+
+### 4. Improved Panel Headers
+```
+┌─────────────────────────────────────────┐
+│ // Latest CVEs              Updated 2m │
+│ [Source: All ▾] [Severity ▾] [30 items]│
+└─────────────────────────────────────────┘
+```
+- Source dropdown + severity filter + item count on one line
+- Last-updated timestamp
+- Loading indicator (spinning ⟳) during fetch
+
+### 5. Map Enhancements
+- **Marker clustering:** Group nearby markers with count badges
+- **Heatmap layer:** Toggle between markers and heatmap
+- **Source filter on map:** Show/hide markers by category or source
+- **Animated markers:** New threats appear with pulse animation
+- **Country highlight:** Click a country to filter all panels by that country
+
+### 6. Dark/Light Theme Toggle (Optional)
+- Toggle button in header
+- Light theme with adjusted colors for readability
+- Store preference in localStorage
+
+### 7. Activity Timeline (Sidebar Bottom)
+Scrolling real-time feed of latest events across all categories:
+```
+16:05  ⚡ CVE-2026-3741 published (MEDIUM 5.1)
+16:03  ⚠ LockBit claimed victim in DE
+16:01  ◉ New article: "Zero-day in..."
+15:58  ⚡ CVE-2026-3740 published (MEDIUM 6.9)
+```
+
+### 8. Keyboard Shortcuts
+| Key | Action |
+|-----|--------|
+| `1-4` | Switch to panel (CVE/Ransom/News/APT) |
+| `r` | Refresh all data |
+| `s` | Focus search bar |
+| `Esc` | Close modal |
+| `?` | Show keyboard shortcuts |
+
+---
+
+## Data Models (v2.0)
+
+### Unified Threat Item
 ```javascript
 {
-  id: "CVE-2026-30823",
-  description: "Flowise before 3.0.13 IDOR vulnerability...",
-  published: "2026-03-07T06:16:00.000Z",
-  cvss: {
-    score: 8.8,
-    severity: "HIGH",
-    vector: "CVSS:3.1"
-  },
-  type: "cve"
-}
-```
-
-### RansomwareVictim
-```javascript
-{
-  id: "r1",
-  organization: "Tech Corp",
-  group: "LockBit",
+  id: "CVE-2026-3741",
+  type: "cve" | "malware" | "ransomware" | "apt" | "news" | "ioc" | "phishing",
+  source: "cvelist" | "github" | "nvd" | "cveorg" | "urlhaus" | ...,
+  title: "YiFang CMS 2.0.5 SQL Injection",
+  description: "A security vulnerability has been detected...",
+  published: "2026-03-08T14:32:10.515Z",
+  severity: { score: 5.1, level: "MEDIUM", vector: "CVSS:4.0/..." },
+  epss: { score: 0.23, percentile: 0.84 },          // if enriched
+  kev: true,                                          // if in CISA KEV
   country: "US",
-  countryCode: "US",
-  sector: "Technology",
-  discovered: "2026-03-01",
-  status: "published"
+  coords: [38.9, -77.0],
+  url: "https://...",
+  tags: ["sql-injection", "web", "cms"],
+  meta: { /* source-specific fields */ }
 }
 ```
 
-### APTGroup
+### Source Health Status
 ```javascript
 {
-  id: "apt29",
-  name: "Cozy Bear",
-  aliases: ["APT29", "The Dukes", "CozyDuke"],
-  country: "RU",
-  targetSectors: ["Government", "Healthcare", "Energy"],
-  description: "..."
+  id: "cvelist",
+  name: "CVEProject (cvelistV5)",
+  status: "ok" | "degraded" | "error",
+  lastFetch: "2026-03-08T16:05:00Z",
+  itemCount: 35,
+  latency: 1200,  // ms
+  error: null
 }
 ```
 
 ---
 
-## Dependencies
+## Implementation Phases
 
-### Current (Vanilla JS)
-```json
-{
-  "leaflet": "^1.9.4"
-}
-```
+### Phase 1: Multi-Source CVE (Expand from 3 → 6 core sources)
+- Add CVE.org (cveawg.mitre.org) fetcher
+- Add EPSS enrichment (batch query after CVE load)
+- Add CISA KEV badge enrichment
+- Change default to "All Sources"
+- Wire severity filter per source
+- Update dropdown with all options
 
-### Original Plan (Not Implemented)
-```json
-{
-  "next": "^14.0.0",
-  "react": "^18.2.0",
-  "typescript": "^5.3.0",
-  "zustand": "^4.4.0",
-  "globe.gl": "^2.27.0",
-  "rss-parser": "^3.13.0"
-}
-```
+### Phase 2: Multi-Source Malware (Replace single source → 5+ sources)
+- Add URLhaus fetcher (JSON download feed)
+- Add ThreatFox fetcher (IOC export)
+- Add InQuest Labs fetcher
+- Add source dropdown to ransomware panel (rename to "Malware/Ransom")
+- Unified malware card design
+- Auto-refresh every 3 min
+
+### Phase 3: Live APT Intelligence (Replace hardcoded → live APIs)
+- Add MISP Galaxy fetcher (953 actors from GitHub raw)
+- Parse and display actor cards with country, aliases, refs
+- Add source dropdown to APT panel
+- Add APT-related RSS feeds (Mandiant, CrowdStrike, Securelist)
+- Search across all actor names and aliases
+
+### Phase 4: News Source Selector
+- Replace category filter with source filter dropdown
+- Allow filtering by individual news outlet
+- Keep "All Sources" as default
+- Add item count to tab badge
+
+### Phase 5: Design Enhancements
+- Add statistics bar
+- Add source badges on all cards
+- EPSS probability display
+- KEV badge display
+- Enhanced card hover effects
+- Loading spinners per panel
+- Activity timeline
+- Keyboard shortcuts
+
+### Phase 6: Testing & Polish
+- Update Playwright tests for new dropdowns
+- Test all source combinations
+- Performance optimization (lazy loading, virtual scrolling for large lists)
+- Error handling for offline/degraded sources
+- Bump version strings and cache keys
+
+---
+
+## API Rate Limits & Constraints
+
+| API | Rate Limit | Strategy |
+|-----|-----------|----------|
+| GitHub API (cvelistV5, Advisory) | 60 req/hr unauthenticated | Cache aggressively, combine calls |
+| NVD | 6 req/sec (5 without API key) | Single query per refresh |
+| CVE.org | Undocumented (generous) | Reasonable polling |
+| OSV.dev | Undocumented (generous) | Cache results |
+| EPSS | Undocumented | Batch queries, cache 1hr |
+| ransomware.live | Undocumented | Cache 5 min |
+| Abuse.ch feeds | Public downloads, no limit | Cache 10 min |
+| InQuest Labs | Undocumented | Cache 10 min |
+| RSS feeds | N/A (static files) | Cache 3 min |
+| MISP Galaxy (GitHub raw) | CDN-cached | Cache 30 min |
 
 ---
 
 ## Testing
 
-### Current Testing Approach
-- Playwright for automated testing
-- Manual browser testing
-- Console log debugging
+### Automated Tests (test_app.py)
+1. ✅ Page loads with all panels
+2. ✅ CVE cards render (30+ items)
+3. ✅ Status bar shows connected
+4. ✅ Threat counter matches data
+5. ✅ Modal opens on CVE click
+6. ✅ Modal closes correctly
+7. 🆕 Source dropdown changes CVE source
+8. 🆕 Malware panel loads data
+9. 🆕 APT panel shows actors
+10. 🆕 All source selectors functional
 
-### Test Coverage
-- ✅ Page load
-- ✅ API calls
-- ✅ Data rendering
-- 🔄 Click handlers (broken)
-- 🔄 Modal functionality (broken)
-
----
-
-## Future Considerations
-
-### Migration Back to Next.js (Optional)
-If the project grows, consider migrating back to Next.js:
-- Better code organization
-- Server-side rendering
-- API routes for proxying
-- TypeScript support
-
-### Potential Enhancements
-- PWA support for offline viewing
-- User accounts for personalized feeds
-- Email alerts for new CVEs
-- Slack/Discord integrations
-- Real-time WebSocket updates
+### Manual Test Matrix
+- [ ] Each CVE source individually
+- [ ] Each malware source individually
+- [ ] Each APT source individually
+- [ ] Each news source individually
+- [ ] "All Sources" for each panel
+- [ ] Severity filter with each CVE source
+- [ ] Search across all panels
+- [ ] Export with multi-source data
+- [ ] Map markers from all sources
+- [ ] Auto-refresh with source selections preserved
 
 ---
 
@@ -410,14 +525,42 @@ If the project grows, consider migrating back to Next.js:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2026-03-07 | Initial vanilla JS implementation |
-| 1.0.1 | 2026-03-08 | Added terminal aesthetic, fixed sorting, added auto-refresh |
-| 1.0.2 | 2026-03-08 | Fixed async issues in renderCVEs (in progress) |
+| 1.0.1 | 2026-03-08 | Terminal aesthetic, sorting, auto-refresh |
+| 1.0.2 | 2026-03-08 | Live news feeds (60+ articles, 10 RSS sources) |
+| 1.0.3 | 2026-03-08 | Real-time CVEs (cvelistV5), GitHub Advisory, precise time-ago |
+| 1.0.4 | 2026-03-08 | Live ransomware (ransomware.live), enriched APT (15 groups) |
+| 1.0.5 | 2026-03-08 | CVE source selector dropdown, severity per source |
+| **2.0.0** | **TBD** | **Multi-source all panels, design refresh (this spec)** |
 
 ---
 
 ## References
 
+### CVE / Vulnerability
 - NVD API: https://services.nvd.nist.gov/rest/json/cves/2.0
+- CVEProject: https://github.com/CVEProject/cvelistV5
+- CVE.org API: https://cveawg.mitre.org/api-docs
+- GitHub Advisory: https://docs.github.com/en/rest/security-advisories
+- OSV.dev: https://osv.dev/docs/
+- EPSS: https://www.first.org/epss/api
 - CISA KEV: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
-- Leaflet Docs: https://leafletjs.com/
+
+### Malware / Ransomware
+- ransomware.live: https://www.ransomware.live/
+- Abuse.ch URLhaus: https://urlhaus.abuse.ch/api/
+- Abuse.ch ThreatFox: https://threatfox.abuse.ch/api/
+- Abuse.ch Feodo: https://feodotracker.abuse.ch/
+- Abuse.ch MalwareBazaar: https://bazaar.abuse.ch/
+- InQuest Labs: https://labs.inquest.net/
+
+### APT / Threat Actors
+- MISP Galaxy: https://github.com/MISP/misp-galaxy
 - MITRE ATT&CK: https://attack.mitre.org/
+- Malpedia: https://malpedia.caad.fkie.fraunhofer.de/
+
+### News
+- HackerNews Algolia: https://hn.algolia.com/api
+
+### Tools
+- Leaflet.js: https://leafletjs.com/
+- Playwright: https://playwright.dev/
