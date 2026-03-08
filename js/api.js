@@ -265,6 +265,149 @@ const API = (() => {
     return kevList.find(kev => kev.cveID === cveId) || null;
   }
 
+  // ── CVEProject/cvelistV5 — Real-time CVEs (0 lag) ────────
+  const CVELIST_COMMITS_API = 'https://api.github.com/repos/CVEProject/cvelistV5/commits';
+  const CVELIST_RAW = 'https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves';
+
+  function cveIdToPath(cveId) {
+    const parts = cveId.split('-');
+    const year = parts[1];
+    const num = parts[2];
+    const dir = num.length > 3 ? num.slice(0, num.length - 3) + 'xxx' : '0xxx';
+    return `${CVELIST_RAW}/${year}/${dir}/${cveId}.json`;
+  }
+
+  function mapCveListEntry(data) {
+    const meta = data.cveMetadata || {};
+    const cna = data.containers?.cna || {};
+    const desc = cna.descriptions?.find(d => d.lang === 'en')?.value
+              || cna.descriptions?.[0]?.value || 'No description';
+    const metrics = cna.metrics || [];
+    let score = 0, severity = 'NONE', vector = '';
+    for (const m of metrics) {
+      const v31 = m.cvssV3_1 || m.cvssV3_0;
+      const v4 = m.cvssV4_0;
+      if (v31) { score = v31.baseScore; severity = v31.baseSeverity; vector = v31.vectorString || ''; break; }
+      if (v4)  { score = v4.baseScore;  severity = v4.baseSeverity;  vector = v4.vectorString || ''; break; }
+    }
+    return {
+      id: meta.cveId,
+      description: desc,
+      published: meta.datePublished || meta.dateUpdated,
+      modified: meta.dateUpdated || meta.datePublished,
+      cvss: { score, severity: (severity || 'NONE').toUpperCase(), vector },
+      references: (cna.references || []).map(r => r.url),
+      cpe: [],
+      source: 'cvelist',
+      type: 'cve'
+    };
+  }
+
+  async function fetchCVEsFromCveList(limit = 30) {
+    try {
+      // Get recent commits — each contains new CVE IDs
+      const commitsResp = await Promise.race([
+        fetch(`${CVELIST_COMMITS_API}?per_page=30`),
+        timeout(12000)
+      ]);
+      if (!commitsResp.ok) throw new Error(`GitHub commits API: ${commitsResp.status}`);
+      const commits = await commitsResp.json();
+
+      // Extract only NEW CVE IDs from commit messages (skip "updated" ones)
+      const cveIds = new Set();
+      for (const c of commits) {
+        const msg = c.commit?.message || '';
+        // Match "X new CVEs:  CVE-2026-1234, CVE-2026-5678"
+        const newBlock = msg.match(/new CVEs?:\s*(CVE[\s\S]*?)(?:\n|$)/i);
+        if (newBlock) {
+          const ids = newBlock[1].match(/CVE-\d{4}-\d+/g) || [];
+          ids.forEach(id => cveIds.add(id));
+        }
+      }
+      if (cveIds.size === 0) throw new Error('No CVE IDs found in commits');
+
+      // Fetch individual CVE JSON files (parallel, capped)
+      const idsToFetch = [...cveIds].slice(0, Math.min(limit + 5, 35));
+      console.log(`[API] cvelistV5: fetching ${idsToFetch.length} CVEs from ${cveIds.size} found`);
+
+      const results = await Promise.allSettled(
+        idsToFetch.map(id =>
+          Promise.race([fetch(cveIdToPath(id)), timeout(5000)])
+            .then(r => r.ok ? r.json() : null)
+            .then(data => data ? mapCveListEntry(data) : null)
+        )
+      );
+
+      const cves = results
+        .filter(r => r.status === 'fulfilled' && r.value)
+        .map(r => r.value);
+
+      cves.sort((a, b) => new Date(b.published) - new Date(a.published));
+      console.log(`[API] cvelistV5: got ${cves.length} real-time CVEs`);
+      return cves.length >= 5 ? cves : null;
+    } catch (err) {
+      console.warn('[API] cvelistV5 fetch failed:', err.message);
+      return null;
+    }
+  }
+
+  // ── GitHub Advisory Database ─────────────────────────────
+  // Free, no key, no CORS issues, ~1 day lag vs NVD's ~6 day lag
+  const GITHUB_ADVISORY_API = 'https://api.github.com/advisories';
+
+  async function fetchGitHubAdvisories(limit = 30, severity = '') {
+    try {
+      const params = new URLSearchParams({
+        per_page: String(Math.min(limit, 100)),
+        sort: 'published',
+        direction: 'desc',
+        type: 'reviewed'
+      });
+      if (severity) params.append('severity', severity.toLowerCase());
+
+      const url = `${GITHUB_ADVISORY_API}?${params.toString()}`;
+      console.log('[API] Fetching from GitHub Advisory DB:', url);
+
+      const response = await Promise.race([
+        fetch(url, { headers: { Accept: 'application/vnd.github+json' } }),
+        timeout(10000)
+      ]);
+      if (!response.ok) throw new Error(`GitHub Advisory API returned ${response.status}`);
+
+      const data = await response.json();
+      if (!Array.isArray(data) || data.length === 0) return null;
+
+      const mapped = data.map(adv => {
+        const v3 = adv.cvss_severities?.cvss_v3?.score;
+        const v4 = adv.cvss_severities?.cvss_v4?.score;
+        const score = (v3 && v3 > 0) ? v3 : (v4 && v4 > 0) ? v4 : 0;
+        const sevMap = { critical: 'CRITICAL', high: 'HIGH', medium: 'MEDIUM', low: 'LOW' };
+        const sev = sevMap[adv.severity] || 'NONE';
+        const pkg = adv.vulnerabilities?.[0]?.package;
+        return {
+          id: adv.cve_id || adv.ghsa_id,
+          description: adv.summary || 'No description',
+          published: adv.published_at,
+          modified: adv.updated_at,
+          cvss: { score, severity: sev, vector: adv.cvss_severities?.cvss_v3?.vector_string || '' },
+          references: adv.references || [],
+          cpe: pkg ? [`${pkg.ecosystem}:${pkg.name}`] : [],
+          link: adv.html_url,
+          source: 'github',
+          type: 'cve'
+        };
+      });
+
+      // Newest first
+      mapped.sort((a, b) => new Date(b.published) - new Date(a.published));
+      console.log(`[API] GitHub Advisory DB returned ${mapped.length} advisories`);
+      return mapped;
+    } catch (err) {
+      console.warn('[API] GitHub Advisory fetch failed, falling back to NVD:', err.message);
+      return null;
+    }
+  }
+
   // Fetch CVEs from NVD API 2.0
   async function fetchCVEsFromNVD(limit = 30, severity = '') {
     try {
@@ -322,15 +465,88 @@ const API = (() => {
     }
   }
 
-  // Fetch CVEs - live NVD first, fallback data on failure
+  // Fetch CVEs from a specific source
+  async function fetchCVEsBySource(source = 'auto', limit = 30, severity = '') {
+    switch (source) {
+      case 'cvelist':
+        return (await fetchCVEsFromCveList(limit)) || [];
+      case 'github':
+        return (await fetchGitHubAdvisories(limit, severity)) || [];
+      case 'nvd':
+        return (await fetchCVEsFromNVD(limit, severity)) || [];
+      case 'all':
+        return fetchAllCVESources(limit, severity);
+      case 'auto':
+      default:
+        return fetchCVEs(limit, severity);
+    }
+  }
+
+  // Fetch from ALL sources, merge, deduplicate, newest first
+  async function fetchAllCVESources(limit = 30, severity = '') {
+    console.log('[API] Fetching from ALL CVE sources...');
+    const [cvelist, github, nvd] = await Promise.allSettled([
+      fetchCVEsFromCveList(limit),
+      fetchGitHubAdvisories(limit, severity),
+      fetchCVEsFromNVD(limit, severity)
+    ]);
+
+    const all = [];
+    const seen = new Set();
+
+    // Helper to add unique CVEs
+    function addUnique(arr, src) {
+      if (!Array.isArray(arr)) return;
+      for (const cve of arr) {
+        if (!seen.has(cve.id)) {
+          seen.add(cve.id);
+          cve._source = src;
+          all.push(cve);
+        }
+      }
+    }
+
+    addUnique(cvelist.value, 'CVEProject');
+    addUnique(github.value, 'GitHub');
+    addUnique(nvd.value, 'NVD');
+
+    // Sort newest first
+    all.sort((a, b) => new Date(b.published) - new Date(a.published));
+
+    // Apply severity filter
+    let filtered = all;
+    if (severity) filtered = all.filter(c => c.cvss?.severity === severity.toUpperCase());
+
+    console.log(`[API] All sources merged: ${all.length} unique CVEs (${cvelist.value?.length || 0} CVEProject + ${github.value?.length || 0} GitHub + ${nvd.value?.length || 0} NVD)`);
+    return filtered.slice(0, limit);
+  }
+
+  // Fetch CVEs — cvelistV5 (real-time) → GitHub Advisory (~1d) → NVD (~6d) → fallback
   async function fetchCVEs(limit = 30, severity = '') {
+    // Try real-time CVEProject source first (0 lag)
+    if (!severity) {
+      const realtime = await fetchCVEsFromCveList(limit);
+      if (realtime) {
+        console.log(`[API] Using real-time cvelistV5 data (${realtime.length} CVEs)`);
+        return realtime.slice(0, limit);
+      }
+    }
+
+    // GitHub Advisory (~1 day lag)
+    const ghAdvisories = await fetchGitHubAdvisories(limit, severity);
+    if (Array.isArray(ghAdvisories) && ghAdvisories.length >= 5) {
+      console.log(`[API] Using GitHub Advisory data (${ghAdvisories.length} entries)`);
+      return ghAdvisories.slice(0, limit);
+    }
+
+    // NVD (~6 day lag)
     const live = await fetchCVEsFromNVD(limit, severity);
     if (Array.isArray(live) && live.length > 0) {
       console.log(`[API] Using live NVD data (${live.length} CVEs)`);
       return live.slice(0, limit);
     }
 
-    console.log('[API] Live NVD unavailable, using fallback CVE data');
+    console.log('[API] Live sources unavailable, using fallback CVE data');
     let fallback = getFallbackCVEs();
     if (severity) fallback = fallback.filter(c => c.cvss?.severity === severity.toUpperCase());
     fallback.sort((a, b) => new Date(b.published) - new Date(a.published));
@@ -339,6 +555,10 @@ const API = (() => {
 
   // Dedicated live CVE fetch — always bypasses cache, used for panel-only refresh
   async function fetchCVEsOnly() {
+    const rt = await fetchCVEsFromCveList(30);
+    if (rt) return rt;
+    const gh = await fetchGitHubAdvisories(30);
+    if (Array.isArray(gh) && gh.length >= 5) return gh;
     return fetchCVEsFromNVD(30);
   }
   
@@ -389,7 +609,63 @@ const API = (() => {
     ];
   }
 
-  // Mock Ransomware data
+  // ── ransomware.live API — Real-time ransomware victims ───
+  const RANSOMWARE_LIVE_API = 'https://api.ransomware.live/v1';
+
+  // Country code to name mapping for ransomware victims
+  const COUNTRY_NAME_MAP = {
+    US: 'United States', GB: 'United Kingdom', DE: 'Germany', FR: 'France',
+    CA: 'Canada', AU: 'Australia', IT: 'Italy', BR: 'Brazil', IN: 'India',
+    JP: 'Japan', CN: 'China', RU: 'Russia', KR: 'South Korea', MX: 'Mexico',
+    ES: 'Spain', NL: 'Netherlands', SE: 'Sweden', CH: 'Switzerland',
+    SG: 'Singapore', IL: 'Israel', AE: 'UAE', ZA: 'South Africa',
+    PL: 'Poland', BE: 'Belgium', AT: 'Austria', CZ: 'Czech Republic'
+  };
+
+  async function fetchLiveRansomware() {
+    const proxies = [
+      url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      url => url // direct (in case CORS is added)
+    ];
+
+    for (const proxy of proxies) {
+      try {
+        const url = proxy(`${RANSOMWARE_LIVE_API}/recentvictims`);
+        const resp = await Promise.race([fetch(url), timeout(12000)]);
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        if (!Array.isArray(data) || data.length === 0) continue;
+
+        const mapped = data.slice(0, 50).map((v, i) => ({
+          id: `rv-${i}-${v.group_name}`,
+          organization: v.post_title || 'Unknown',
+          group: v.group_name || 'Unknown',
+          country: COUNTRY_NAME_MAP[v.country] || v.country || 'Unknown',
+          countryCode: v.country || 'US',
+          sector: v.activity || 'Unknown',
+          discovered: v.discovered || v.published,
+          description: v.description ? v.description.replace(/\[AI generated\]\s*/i, '').slice(0, 200) : `${v.group_name} ransomware attack on ${v.post_title}`,
+          website: v.website || '',
+          type: 'ransomware'
+        }));
+
+        console.log(`[API] ransomware.live: ${mapped.length} live victims`);
+        return mapped;
+      } catch (err) {
+        continue;
+      }
+    }
+    console.warn('[API] ransomware.live unreachable, using fallback');
+    return null;
+  }
+
+  async function fetchRansomware() {
+    const live = await fetchLiveRansomware();
+    return live || getMockRansomware();
+  }
+
+  // Mock Ransomware data (fallback)
   function getMockRansomware() {
     const now = new Date();
     return [
@@ -401,14 +677,29 @@ const API = (() => {
     ];
   }
 
-  // Mock APT data
+  // Mock APT data — enriched with real MITRE ATT&CK data
   function getMockAPT() {
     return [
-      { id: 'apt1', name: 'APT28', aliases: ['Fancy Bear', 'Strontium'], country: 'RU', targetSectors: ['Government', 'Defense', 'Energy'], description: 'Russian state-sponsored group targeting NATO allies', type: 'apt' },
-      { id: 'apt2', name: 'APT29', aliases: ['Cozy Bear', 'The Dukes'], country: 'RU', targetSectors: ['Government', 'Healthcare', 'Think Tanks'], description: 'Russian intelligence targeting diplomatic entities', type: 'apt' },
-      { id: 'apt3', name: 'APT40', aliases: ['Barium', 'GREF'], country: 'CN', targetSectors: ['Maritime', 'Defense', 'Research'], description: 'Chinese group targeting Southeast Asia', type: 'apt' },
-      { id: 'apt4', name: 'Lazarus', aliases: ['Hidden Cobra', 'Zinc'], country: 'KP', targetSectors: ['Finance', 'Cryptocurrency', 'Defense'], description: 'North Korean financially-motivated group', type: 'apt' },
-      { id: 'apt5', name: 'APT41', aliases: ['Winnti', 'Barium'], country: 'CN', targetSectors: ['Healthcare', 'Pharmaceuticals', 'Software'], description: 'Chinese state-sponsored with criminal operations', type: 'apt' },
+      // Russia
+      { id: 'G0007', name: 'APT28', aliases: ['Fancy Bear', 'Strontium', 'Sofacy', 'Sednit'], country: 'RU', targetSectors: ['Government', 'Defense', 'Energy', 'Media'], description: 'Russian GRU Unit 26165. Active since 2004, targeting NATO allies, election interference, and defense contractors. Uses spearphishing, zero-days, and credential harvesting.', techniques: ['T1566', 'T1059', 'T1071'], type: 'apt' },
+      { id: 'G0016', name: 'APT29', aliases: ['Cozy Bear', 'The Dukes', 'Midnight Blizzard', 'Nobelium'], country: 'RU', targetSectors: ['Government', 'Healthcare', 'Think Tanks', 'Technology'], description: 'Russian SVR intelligence. Behind SolarWinds (2020) and Microsoft breach (2024). Highly sophisticated supply-chain attacks.', techniques: ['T1195', 'T1078', 'T1550'], type: 'apt' },
+      { id: 'G0034', name: 'Sandworm', aliases: ['Voodoo Bear', 'IRIDIUM', 'Seashell Blizzard'], country: 'RU', targetSectors: ['Energy', 'Government', 'Critical Infrastructure'], description: 'Russian GRU Unit 74455. Responsible for NotPetya (2017), Ukraine power grid attacks, and Olympic Destroyer.', techniques: ['T1498', 'T1485', 'T1486'], type: 'apt' },
+      { id: 'G0032', name: 'Turla', aliases: ['Snake', 'Venomous Bear', 'Waterbug'], country: 'RU', targetSectors: ['Government', 'Diplomatic', 'Military', 'Research'], description: 'Russian FSB-linked. One of the most sophisticated APTs, known for hijacking other groups\' infrastructure and satellite-based C2.', techniques: ['T1071', 'T1102', 'T1573'], type: 'apt' },
+      // China
+      { id: 'G0006', name: 'APT1', aliases: ['Comment Crew', 'PLA Unit 61398'], country: 'CN', targetSectors: ['Technology', 'Aerospace', 'Energy', 'Manufacturing'], description: 'Chinese PLA Unit 61398. Prolific espionage group first exposed by Mandiant in 2013. Economic espionage focus.', techniques: ['T1566', 'T1003', 'T1005'], type: 'apt' },
+      { id: 'G0096', name: 'APT41', aliases: ['Winnti', 'Barium', 'Wicked Panda'], country: 'CN', targetSectors: ['Healthcare', 'Pharmaceuticals', 'Software', 'Gaming'], description: 'Chinese dual-purpose group conducting both state espionage and financially motivated operations. Supply-chain attacks on software companies.', techniques: ['T1195', 'T1059', 'T1055'], type: 'apt' },
+      { id: 'G0065', name: 'APT40', aliases: ['Leviathan', 'TEMP.Periscope', 'Bronze Mohawk'], country: 'CN', targetSectors: ['Maritime', 'Defense', 'Aviation', 'Research'], description: 'Chinese MSS-affiliated, targeting South China Sea geopolitical interests. Known for exploiting public-facing applications.', techniques: ['T1190', 'T1133', 'T1505'], type: 'apt' },
+      { id: 'G1030', name: 'Volt Typhoon', aliases: ['Bronze Silhouette', 'Vanguard Panda'], country: 'CN', targetSectors: ['Critical Infrastructure', 'Telecommunications', 'Energy'], description: 'Chinese state-sponsored group pre-positioning in US critical infrastructure. Uses living-off-the-land techniques to avoid detection.', techniques: ['T1059', 'T1218', 'T1003'], type: 'apt' },
+      { id: 'G1029', name: 'Salt Typhoon', aliases: ['GhostEmperor', 'FamousSparrow'], country: 'CN', targetSectors: ['Telecommunications', 'ISP', 'Government'], description: 'Chinese group that infiltrated major US telecom providers in 2024, accessing call records and surveillance systems.', techniques: ['T1190', 'T1071', 'T1005'], type: 'apt' },
+      // North Korea
+      { id: 'G0032', name: 'Lazarus Group', aliases: ['Hidden Cobra', 'Zinc', 'Diamond Sleet'], country: 'KP', targetSectors: ['Finance', 'Cryptocurrency', 'Defense', 'Media'], description: 'North Korean state-sponsored. Behind Sony hack (2014), WannaCry (2017), $620M Ronin bridge theft. Funds nuclear program.', techniques: ['T1566', 'T1059', 'T1486'], type: 'apt' },
+      { id: 'G0082', name: 'Kimsuky', aliases: ['Velvet Chollima', 'Emerald Sleet', 'Thallium'], country: 'KP', targetSectors: ['Government', 'Research', 'Think Tanks', 'Defense'], description: 'North Korean intelligence-gathering group. Targets South Korean and US policy experts via social engineering and credential theft.', techniques: ['T1566', 'T1598', 'T1078'], type: 'apt' },
+      // Iran
+      { id: 'G0059', name: 'APT33', aliases: ['Elfin', 'Refined Kitten', 'Peach Sandstorm'], country: 'IR', targetSectors: ['Aviation', 'Energy', 'Petrochemical', 'Defense'], description: 'Iranian MOIS-linked. Targets aviation and energy sectors with destructive malware. Connected to Shamoon campaigns.', techniques: ['T1566', 'T1110', 'T1486'], type: 'apt' },
+      { id: 'G0064', name: 'APT34', aliases: ['OilRig', 'Helix Kitten', 'Hazel Sandstorm'], country: 'IR', targetSectors: ['Government', 'Finance', 'Energy', 'Telecommunications'], description: 'Iranian cyber espionage group targeting Middle Eastern organizations. Uses custom backdoors and DNS tunneling.', techniques: ['T1071', 'T1059', 'T1105'], type: 'apt' },
+      { id: 'G1031', name: 'MuddyWater', aliases: ['Mercury', 'Mango Sandstorm', 'Static Kitten'], country: 'IR', targetSectors: ['Government', 'Telecommunications', 'Oil & Gas'], description: 'Iranian MOIS subordinate. Targets Middle East, Central/South Asia. Uses living-off-the-land and legitimate tools.', techniques: ['T1059', 'T1218', 'T1105'], type: 'apt' },
+      // Others
+      { id: 'G1028', name: 'Scattered Spider', aliases: ['UNC3944', 'Octo Tempest', 'Star Fraud'], country: 'US', targetSectors: ['Telecommunications', 'Technology', 'Finance', 'Hospitality'], description: 'English-speaking cybercriminal group. Social-engineering help desks for MFA bypass. MGM and Caesars attacks (2023).', techniques: ['T1566', 'T1078', 'T1199'], type: 'apt' },
     ];
   }
 
@@ -418,7 +709,16 @@ const API = (() => {
     DE: [51.1657, 10.4515], GB: [55.3781, -3.4360], FR: [46.2276, 2.2137],
     JP: [36.2048, 138.2529], IN: [20.5937, 78.9629], KR: [35.9078, 127.7669],
     BR: [-14.2350, -51.9253], AU: [-25.2744, 133.7751], IL: [31.0461, 34.8516],
-    IR: [32.4279, 53.6880], UA: [48.3794, 31.1656], SG: [1.3521, 103.8198]
+    IR: [32.4279, 53.6880], UA: [48.3794, 31.1656], SG: [1.3521, 103.8198],
+    KP: [40.3399, 127.5101], CA: [56.1304, -106.3468], IT: [41.8719, 12.5674],
+    ES: [40.4637, -3.7492], NL: [52.1326, 5.2913], SE: [60.1282, 18.6435],
+    CH: [46.8182, 8.2275], PL: [51.9194, 19.1451], MX: [23.6345, -102.5528],
+    ZA: [-30.5595, 22.9375], AE: [23.4241, 53.8478], SA: [23.8859, 45.0792],
+    BE: [50.5039, 4.4699], AT: [47.5162, 14.5501], CZ: [49.8175, 15.4730],
+    PH: [12.8797, 121.7740], TH: [15.8700, 100.9925], ID: [-0.7893, 113.9213],
+    CO: [4.5709, -74.2973], AR: [-38.4161, -63.6167], CL: [-35.6751, -71.5430],
+    NG: [9.0820, 8.6753], EG: [26.8206, 30.8025], TR: [38.9637, 35.2433],
+    MY: [4.2105, 101.9758], VN: [14.0583, 108.2772], PK: [30.3753, 69.3451]
   };
 
   // Get coordinates for a threat
@@ -428,8 +728,8 @@ const API = (() => {
 
   // Main entry: load all data
   async function loadAllData() {
-    const CACHE_KEY = 'cybervulndb_data';
-    const CACHE_TS_KEY = 'cybervulndb_ts';
+    const CACHE_KEY = 'cybervulndb_data_v4';
+    const CACHE_TS_KEY = 'cybervulndb_ts_v4';
     const CACHE_MAX_AGE = 15 * 60 * 1000; // 15 minutes
 
     const cachedTs = Utils.storageGet(CACHE_TS_KEY);
@@ -443,14 +743,16 @@ const API = (() => {
 
     console.log('[API] Loading fresh data...');
     
-    // Load data with resilient fallbacks
-    const cves = await fetchCVEs(30);
-    const ransomware = getMockRansomware();
-    const apt = getMockAPT();
-    const news = await Promise.race([
-      fetchAllNews().catch(() => []),
-      timeout(20000).catch(() => [])  // allow more time for multi-source news
+    // Load data with resilient fallbacks — all live sources in parallel
+    const [cves, ransomware, news] = await Promise.all([
+      fetchCVEs(30),
+      fetchRansomware(),
+      Promise.race([
+        fetchAllNews().catch(() => []),
+        timeout(20000).catch(() => [])
+      ])
     ]);
+    const apt = getMockAPT();
 
     const data = { cves, ransomware, apt, news };
     
@@ -471,6 +773,8 @@ const API = (() => {
     loadAllData,
     fetchCVEs,
     fetchCVEsOnly,
+    fetchCVEsBySource,
+    fetchRansomware,
     fetchAllNews,
     fetchNewsOnly,
     fetchKEV,

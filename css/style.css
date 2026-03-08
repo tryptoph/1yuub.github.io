@@ -1300,7 +1300,36 @@ select:focus-visible {
 .cve-header-right {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+#cve-source-filter {
+  font-size: 0.62rem;
+  padding: 2px 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--primary);
+  border-radius: 3px;
+  font-family: 'IBM Plex Mono', monospace;
+  cursor: pointer;
+  max-width: 140px;
+}
+
+#cve-source-filter:focus {
+  border-color: var(--primary);
+  outline: none;
+}
+
+/* Loading spinner */
+.loading-spin {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+  font-size: 1.5rem;
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 
 .news-timestamp {

@@ -572,13 +572,30 @@
   }
 
   // ── Filters ───────────────────────────────────────────
+  // Track current CVE source selection
+  let currentCVESource = 'auto';
+
   function initFilters() {
     const cveFilter = document.getElementById('cve-severity-filter');
     if (cveFilter) {
       cveFilter.addEventListener('change', async () => {
         currentSeverityFilter = cveFilter.value;
-        const data = window.cyberData || { cves: [] };
-        renderCVEs(data.cves);
+        // If not auto, refetch from the selected source with new severity
+        if (currentCVESource !== 'auto') {
+          await refetchCVESource();
+        } else {
+          const data = window.cyberData || { cves: [] };
+          renderCVEs(data.cves);
+        }
+      });
+    }
+
+    // CVE source selector
+    const sourceFilter = document.getElementById('cve-source-filter');
+    if (sourceFilter) {
+      sourceFilter.addEventListener('change', async () => {
+        currentCVESource = sourceFilter.value;
+        await refetchCVESource();
       });
     }
 
@@ -593,6 +610,36 @@
         }
         renderNews(filtered);
       });
+    }
+  }
+
+  // Fetch CVEs from the selected source and re-render
+  async function refetchCVESource() {
+    const container = document.getElementById('cve-list');
+    if (container) {
+      container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading from source...</div></div>';
+    }
+
+    try {
+      const cves = await API.fetchCVEsBySource(currentCVESource, 30, currentSeverityFilter);
+      if (window.cyberData) window.cyberData.cves = cves;
+      renderCVEs(cves);
+      cveLastFetchTime = Date.now();
+      updateCveTimestamp();
+
+      const badge = document.getElementById('cve-count-badge');
+      if (badge) badge.textContent = cves.length || '';
+
+      // Update threat counter
+      const data = window.cyberData || {};
+      const total = (data.cves || []).length + (data.ransomware || []).length + (data.apt || []).length + (data.news || []).length;
+      const statusCount = document.getElementById('status-count');
+      if (statusCount) statusCount.innerHTML = `<span class="status-icon">›</span> ${total} threats`;
+
+      UI.showToast(`Loaded ${cves.length} CVEs from ${currentCVESource === 'auto' ? 'best source' : currentCVESource}`, 'info');
+    } catch (err) {
+      UI.showToast('Failed to fetch CVEs from source', 'error');
+      console.error('[App] Source fetch error:', err);
     }
   }
 

@@ -26,7 +26,7 @@ def main():
         try:
             print("Loading CyberVulnDB...")
             page.goto("http://localhost:8082", wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_selector("#cve-list .threat-card", timeout=15000)
+            page.wait_for_selector("#cve-list .threat-card", timeout=30000)
 
             data_stats = page.evaluate(
                 """() => {

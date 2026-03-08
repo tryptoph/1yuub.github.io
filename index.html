@@ -89,7 +89,13 @@
           <h3>// Latest CVEs</h3>
           <div class="cve-header-right">
             <span id="cve-last-updated" class="news-timestamp"></span>
-            <span class="nvd-lag-note" title="NVD typically publishes CVEs 3–7 days after disclosure">⚡ NVD ~6d lag</span>
+            <select id="cve-source-filter" title="Choose CVE data source">
+              <option value="auto">⚡ Auto (Best)</option>
+              <option value="cvelist">CVEProject (Real-time)</option>
+              <option value="github">GitHub Advisory</option>
+              <option value="nvd">NVD (NIST)</option>
+              <option value="all">All Sources (Merged)</option>
+            </select>
             <select id="cve-severity-filter">
               <option value="">All Severity</option>
               <option value="CRITICAL">Critical</option>
@@ -188,7 +194,7 @@
     <div class="status-item" id="status-update">--:--:--</div>
     <div class="status-item" id="status-count">0 threats</div>
     <div class="status-item" style="margin-left:auto;color:var(--text-muted)">
-      Data: NVD / CISA / RSS
+      Data: CVEProject / GitHub / ransomware.live / RSS
     </div>
   </footer>
 
@@ -206,11 +212,11 @@
 
 <!-- Scripts -->
 <script src="lib/leaflet.js"></script>
-<script src="js/utils.js"></script>
-<script src="js/api.js"></script>
-<script src="js/map.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/app.js"></script>
+<script src="js/utils.js?v=5"></script>
+<script src="js/api.js?v=5"></script>
+<script src="js/map.js?v=5"></script>
+<script src="js/ui.js?v=5"></script>
+<script src="js/app.js?v=5"></script>
 
 </body>
 </html>
