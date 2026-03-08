@@ -1321,6 +1321,69 @@ select:focus-visible {
   outline: none;
 }
 
+#malware-source-filter {
+  font-size: 0.62rem;
+  padding: 2px 4px;
+  background: var(--surface, var(--bg-card));
+  border: 1px solid var(--border);
+  color: var(--ransomware);
+  border-radius: 3px;
+  font-family: 'IBM Plex Mono', monospace;
+  cursor: pointer;
+  max-width: 160px;
+}
+
+#malware-source-filter:focus {
+  border-color: var(--ransomware);
+  outline: none;
+}
+
+#apt-source-filter {
+  font-size: 0.62rem;
+  padding: 2px 4px;
+  background: var(--surface, var(--bg-card));
+  border: 1px solid var(--border);
+  color: var(--apt);
+  border-radius: 3px;
+  font-family: 'IBM Plex Mono', monospace;
+  cursor: pointer;
+  max-width: 170px;
+}
+
+#apt-source-filter:focus {
+  border-color: var(--apt);
+  outline: none;
+}
+
+#news-source-filter {
+  font-size: 0.62rem;
+  padding: 2px 4px;
+  background: var(--surface, var(--bg-card));
+  border: 1px solid var(--border);
+  color: var(--info);
+  border-radius: 3px;
+  font-family: 'IBM Plex Mono', monospace;
+  cursor: pointer;
+  max-width: 160px;
+}
+
+#news-source-filter:focus {
+  border-color: var(--info);
+  outline: none;
+}
+
+.source-badge {
+  font-size: 0.55rem;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: rgba(0, 255, 213, 0.1);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(0, 255, 213, 0.2);
+  font-family: 'IBM Plex Mono', monospace;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
 /* Loading spinner */
 .loading-spin {
   display: inline-block;

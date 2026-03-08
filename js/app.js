@@ -116,8 +116,11 @@
 
   async function refreshCVEPanel() {
     try {
-      const fresh = await API.fetchCVEsOnly();
+      const fresh = await API.fetchCVEsBySource(currentCVESource, 30, currentSeverityFilter);
       if (!fresh || !fresh.length) return;
+
+      // Enrich with EPSS
+      await API.enrichWithEPSS(fresh);
 
       // Find IDs that are truly new since last render
       const newIds = fresh.filter(c => !knownCveIds.has(c.id)).map(c => c.id);
@@ -347,6 +350,7 @@
             <span class="threat-card-type${isFresh ? ' news-live-badge' : ''}">
               ${isFresh ? '<span class="news-dot"></span>' : ''}${categoryLabel}
             </span>
+            <span class="source-badge">${escapeHtml(item.source || item.sourceKey || 'Unknown')}</span>
             <span class="threat-card-date" data-ts="${item.published}">${formatDate(item.published)}</span>
           </div>
           <div class="threat-card-title">${escapeHtml(item.title)}</div>
@@ -573,7 +577,7 @@
 
   // ── Filters ───────────────────────────────────────────
   // Track current CVE source selection
-  let currentCVESource = 'auto';
+  let currentCVESource = 'all';
 
   function initFilters() {
     const cveFilter = document.getElementById('cve-severity-filter');
@@ -599,16 +603,64 @@
       });
     }
 
-    const newsFilter = document.getElementById('news-category-filter');
-    if (newsFilter) {
-      newsFilter.addEventListener('change', () => {
-        const category = newsFilter.value;
-        const data = window.cyberData || { news: [] };
-        let filtered = data.news;
-        if (category) {
-          filtered = data.news.filter(n => n.category === category);
+    const newsSourceFilter = document.getElementById('news-source-filter');
+    if (newsSourceFilter) {
+      newsSourceFilter.addEventListener('change', async () => {
+        const source = newsSourceFilter.value;
+        const container = document.getElementById('news-list');
+        if (container) {
+          container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading news...</div></div>';
         }
-        renderNews(filtered);
+        try {
+          const items = await API.fetchNewsBySource(source);
+          if (window.cyberData) window.cyberData.news = items;
+          renderNews(items);
+          const badge = document.getElementById('news-count-badge');
+          if (badge) badge.textContent = items.length || '';
+          UI.showToast(`Loaded ${items.length} articles from ${source === 'all' ? 'all sources' : source}`, 'info');
+        } catch (err) {
+          UI.showToast('Failed to fetch news', 'error');
+        }
+      });
+    }
+
+    // Malware source selector
+    const malwareFilter = document.getElementById('malware-source-filter');
+    if (malwareFilter) {
+      malwareFilter.addEventListener('change', async () => {
+        const source = malwareFilter.value;
+        const container = document.getElementById('ransomware-list');
+        if (container) {
+          container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading from source...</div></div>';
+        }
+        try {
+          const items = await API.fetchMalwareBySource(source, 30);
+          if (window.cyberData) window.cyberData.ransomware = items;
+          renderRansomware(items);
+          UI.showToast(`Loaded ${items.length} threats from ${source === 'all' ? 'all sources' : source}`, 'info');
+        } catch (err) {
+          UI.showToast('Failed to fetch malware data', 'error');
+        }
+      });
+    }
+
+    // APT source selector
+    const aptFilter = document.getElementById('apt-source-filter');
+    if (aptFilter) {
+      aptFilter.addEventListener('change', async () => {
+        const source = aptFilter.value;
+        const container = document.getElementById('apt-list');
+        if (container) {
+          container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading APT data...</div></div>';
+        }
+        try {
+          const items = await API.fetchAPTBySource(source, 50);
+          if (window.cyberData) window.cyberData.apt = items;
+          renderAPT(items);
+          UI.showToast(`Loaded ${items.length} APT groups from ${source === 'all' ? 'all sources' : source}`, 'info');
+        } catch (err) {
+          UI.showToast('Failed to fetch APT data', 'error');
+        }
       });
     }
   }

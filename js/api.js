@@ -30,19 +30,24 @@ const API = (() => {
   let kevCache = null;
   let kevCacheTime = null;
   const KEV_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
+
+  // Cache for MISP Galaxy data (3MB payload, 30 min TTL)
+  let mispCache = null;
+  let mispCacheTime = null;
+  const MISP_CACHE_DURATION = 30 * 60 * 1000;
   
   // Security RSS Feeds — broader, more reliable sources
   const RSS_FEEDS = [
-    { name: 'The Hacker News',  url: 'https://feeds.feedburner.com/TheHackersNews',           category: 'vulnerabilities' },
-    { name: 'Krebs on Security', url: 'https://krebsonsecurity.com/feed/',                    category: 'breaches' },
-    { name: 'BleepingComputer', url: 'https://www.bleepingcomputer.com/feed/',                 category: 'vulnerabilities' },
-    { name: 'SANS ISC',         url: 'https://isc.sans.edu/rssfeed.xml',                       category: 'malware' },
-    { name: 'SecurityWeek',     url: 'https://www.securityweek.com/feed/',                     category: 'enterprise' },
-    { name: 'Dark Reading',     url: 'https://www.darkreading.com/rss.xml',                    category: 'enterprise' },
-    { name: 'Malwarebytes',     url: 'https://blog.malwarebytes.com/feed/',                    category: 'malware' },
-    { name: 'Threatpost',       url: 'https://threatpost.com/feed/',                           category: 'vulnerabilities' },
-    { name: 'Schneier',         url: 'https://www.schneier.com/blog/atom.xml',                 category: 'policy' },
-    { name: 'Wired Security',   url: 'https://www.wired.com/category/security/feed/rss/',      category: 'enterprise' },
+    { name: 'The Hacker News',  key: 'hackernews-rss', url: 'https://feeds.feedburner.com/TheHackersNews',           category: 'vulnerabilities' },
+    { name: 'Krebs on Security', key: 'krebs', url: 'https://krebsonsecurity.com/feed/',                    category: 'breaches' },
+    { name: 'BleepingComputer', key: 'bleeping', url: 'https://www.bleepingcomputer.com/feed/',                 category: 'vulnerabilities' },
+    { name: 'SANS ISC',         key: 'sans', url: 'https://isc.sans.edu/rssfeed.xml',                       category: 'malware' },
+    { name: 'SecurityWeek',     key: 'securityweek', url: 'https://www.securityweek.com/feed/',                     category: 'enterprise' },
+    { name: 'Dark Reading',     key: 'darkreading', url: 'https://www.darkreading.com/rss.xml',                    category: 'enterprise' },
+    { name: 'Malwarebytes',     key: 'malwarebytes', url: 'https://blog.malwarebytes.com/feed/',                    category: 'malware' },
+    { name: 'Threatpost',       key: 'threatpost', url: 'https://threatpost.com/feed/',                           category: 'vulnerabilities' },
+    { name: 'Schneier',         key: 'schneier', url: 'https://www.schneier.com/blog/atom.xml',                 category: 'policy' },
+    { name: 'Wired Security',   key: 'wired', url: 'https://www.wired.com/category/security/feed/rss/',      category: 'enterprise' },
   ];
 
   // Country code mapping for CVEs
@@ -82,6 +87,7 @@ const API = (() => {
               link: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
               description: (h.story_text || '').replace(/<[^>]+>/g, '').substring(0, 200) || h.title,
               source: 'HackerNews',
+              sourceKey: 'hn-algolia',
               category,
               published: h.created_at,
               type: 'news',
@@ -118,6 +124,7 @@ const API = (() => {
             link: item.link || '',
             description: (item.description || '').replace(/<[^>]+>/g, '').substring(0, 200),
             source: feed.name,
+            sourceKey: feed.key,
             category: feed.category,
             published: item.pubDate || new Date().toISOString(),
             type: 'news',
@@ -186,6 +193,7 @@ const API = (() => {
         link: getContent('link'),
         description: getContent('description').substring(0, 200),
         source: feed.name,
+        sourceKey: feed.key,
         category: feed.category,
         published: getContent('pubDate') || new Date().toISOString(),
         type: 'news'
@@ -225,6 +233,24 @@ const API = (() => {
   // Fetch only news (bypasses main data cache — use for live panel updates)
   async function fetchNewsOnly() {
     return fetchAllNews();
+  }
+
+  // Fetch news filtered by source key
+  async function fetchNewsBySource(source = 'all') {
+    if (source === 'all') return fetchAllNews();
+    if (source === 'hn-algolia') {
+      console.log('[API] Fetching news from HackerNews only...');
+      return fetchHackerNews();
+    }
+    const feed = RSS_FEEDS.find(f => f.key === source);
+    if (!feed) {
+      console.warn(`[API] Unknown news source: ${source}`);
+      return [];
+    }
+    console.log(`[API] Fetching news from ${feed.name} only...`);
+    const items = await fetchRSSWithFallbacks(feed);
+    items.sort((a, b) => new Date(b.published) - new Date(a.published));
+    return items;
   }
 
   // Fetch CISA KEV data
@@ -452,6 +478,7 @@ const API = (() => {
           cpe: cve.configurations?.flatMap(c =>
             c.nodes?.flatMap(n => n.cpeMatch?.map(m => m.criteria) || []) || []
           ) || [],
+          source: 'nvd',
           type: 'cve'
         };
       });
@@ -465,6 +492,141 @@ const API = (() => {
     }
   }
 
+  // ── CVE.org (MITRE) — Official CVE API ──────────────────
+  const CVEORG_API = 'https://cveawg.mitre.org/api/cve';
+
+  async function fetchCVEsFromCVEOrg(limit = 30) {
+    try {
+      const since = new Date();
+      since.setDate(since.getDate() - 7);
+
+      const params = new URLSearchParams({
+        state: 'PUBLISHED',
+        'time_modified.gt': since.toISOString(),
+        count_only: ''
+      });
+
+      // First get count to verify API is responding
+      const countResp = await Promise.race([
+        fetch(`${CVEORG_API}?${params.toString()}`),
+        timeout(10000)
+      ]);
+      if (!countResp.ok) throw new Error(`CVE.org API returned ${countResp.status}`);
+
+      // Now fetch actual CVE list
+      const listParams = new URLSearchParams({
+        state: 'PUBLISHED',
+        'time_modified.gt': since.toISOString(),
+        limit: String(Math.min(limit + 5, 50))
+      });
+
+      const listResp = await Promise.race([
+        fetch(`${CVEORG_API}?${listParams.toString()}`),
+        timeout(15000)
+      ]);
+      if (!listResp.ok) throw new Error(`CVE.org list API returned ${listResp.status}`);
+
+      const listData = await listResp.json();
+      const cveRecords = listData.cveRecords || listData.cves || listData;
+
+      if (!Array.isArray(cveRecords) || cveRecords.length === 0) {
+        // Fallback: API may return only IDs — fetch individually
+        const ids = (Array.isArray(listData) ? listData : [])
+          .map(item => item.cveId || item.cveMetadata?.cveId || (typeof item === 'string' ? item : null))
+          .filter(Boolean)
+          .slice(0, Math.min(limit + 5, 35));
+
+        if (ids.length === 0) throw new Error('No CVE records from CVE.org list');
+
+        console.log(`[API] CVE.org: fetching ${ids.length} individual CVEs`);
+        const results = await Promise.allSettled(
+          ids.map(id =>
+            Promise.race([fetch(`${CVEORG_API}/${id}`), timeout(5000)])
+              .then(r => r.ok ? r.json() : null)
+              .then(data => {
+                if (!data) return null;
+                const entry = mapCveListEntry(data);
+                if (entry) entry.source = 'cveorg';
+                return entry;
+              })
+          )
+        );
+
+        const cves = results
+          .filter(r => r.status === 'fulfilled' && r.value)
+          .map(r => r.value);
+
+        cves.sort((a, b) => new Date(b.published) - new Date(a.published));
+        console.log(`[API] CVE.org: got ${cves.length} CVEs (individual fetch)`);
+        return cves.length >= 3 ? cves.slice(0, limit) : null;
+      }
+
+      // Records returned inline — parse with mapCveListEntry
+      const mapped = cveRecords.map(record => {
+        try {
+          const entry = mapCveListEntry(record);
+          if (entry) entry.source = 'cveorg';
+          return entry;
+        } catch { return null; }
+      }).filter(Boolean);
+
+      mapped.sort((a, b) => new Date(b.published) - new Date(a.published));
+      console.log(`[API] CVE.org: got ${mapped.length} CVEs`);
+      return mapped.length >= 3 ? mapped.slice(0, limit) : null;
+    } catch (err) {
+      console.warn('[API] CVE.org fetch failed:', err.message);
+      return null;
+    }
+  }
+
+  // ── EPSS Enrichment — Exploit Prediction Scoring ────────
+  const EPSS_API = 'https://api.first.org/data/v1/epss';
+
+  async function enrichWithEPSS(cves) {
+    if (!Array.isArray(cves) || cves.length === 0) return cves;
+    try {
+      const ids = cves.map(c => c.id).filter(Boolean);
+      if (ids.length === 0) return cves;
+
+      // Batch in groups of 30
+      const batches = [];
+      for (let i = 0; i < ids.length; i += 30) {
+        batches.push(ids.slice(i, i + 30));
+      }
+
+      const epssMap = new Map();
+      const results = await Promise.allSettled(
+        batches.map(batch =>
+          Promise.race([
+            fetch(`${EPSS_API}?cve=${batch.join(',')}`),
+            timeout(8000)
+          ]).then(r => r.ok ? r.json() : null)
+        )
+      );
+
+      for (const r of results) {
+        if (r.status !== 'fulfilled' || !r.value?.data) continue;
+        for (const entry of r.value.data) {
+          epssMap.set(entry.cve, {
+            score: parseFloat(entry.epss),
+            percentile: parseFloat(entry.percentile)
+          });
+        }
+      }
+
+      // Enrich CVE objects in-place
+      for (const cve of cves) {
+        const epss = epssMap.get(cve.id);
+        if (epss) cve.epss = epss;
+      }
+
+      console.log(`[API] EPSS enrichment: ${epssMap.size}/${cves.length} CVEs scored`);
+    } catch (err) {
+      console.warn('[API] EPSS enrichment failed (non-fatal):', err.message);
+    }
+    return cves;
+  }
+
   // Fetch CVEs from a specific source
   async function fetchCVEsBySource(source = 'auto', limit = 30, severity = '') {
     switch (source) {
@@ -474,6 +636,8 @@ const API = (() => {
         return (await fetchGitHubAdvisories(limit, severity)) || [];
       case 'nvd':
         return (await fetchCVEsFromNVD(limit, severity)) || [];
+      case 'cveorg':
+        return (await fetchCVEsFromCVEOrg(limit)) || [];
       case 'all':
         return fetchAllCVESources(limit, severity);
       case 'auto':
@@ -485,10 +649,11 @@ const API = (() => {
   // Fetch from ALL sources, merge, deduplicate, newest first
   async function fetchAllCVESources(limit = 30, severity = '') {
     console.log('[API] Fetching from ALL CVE sources...');
-    const [cvelist, github, nvd] = await Promise.allSettled([
+    const [cvelist, github, nvd, cveorg] = await Promise.allSettled([
       fetchCVEsFromCveList(limit),
       fetchGitHubAdvisories(limit, severity),
-      fetchCVEsFromNVD(limit, severity)
+      fetchCVEsFromNVD(limit, severity),
+      fetchCVEsFromCVEOrg(limit)
     ]);
 
     const all = [];
@@ -509,6 +674,7 @@ const API = (() => {
     addUnique(cvelist.value, 'CVEProject');
     addUnique(github.value, 'GitHub');
     addUnique(nvd.value, 'NVD');
+    addUnique(cveorg.value, 'CVE.org');
 
     // Sort newest first
     all.sort((a, b) => new Date(b.published) - new Date(a.published));
@@ -517,8 +683,12 @@ const API = (() => {
     let filtered = all;
     if (severity) filtered = all.filter(c => c.cvss?.severity === severity.toUpperCase());
 
-    console.log(`[API] All sources merged: ${all.length} unique CVEs (${cvelist.value?.length || 0} CVEProject + ${github.value?.length || 0} GitHub + ${nvd.value?.length || 0} NVD)`);
-    return filtered.slice(0, limit);
+    console.log(`[API] All sources merged: ${all.length} unique CVEs (${cvelist.value?.length || 0} CVEProject + ${github.value?.length || 0} GitHub + ${nvd.value?.length || 0} NVD + ${cveorg.value?.length || 0} CVE.org)`);
+
+    // Enrich with EPSS scores
+    const result = filtered.slice(0, limit);
+    await enrichWithEPSS(result);
+    return result;
   }
 
   // Fetch CVEs — cvelistV5 (real-time) → GitHub Advisory (~1d) → NVD (~6d) → fallback
@@ -665,6 +835,238 @@ const API = (() => {
     return live || getMockRansomware();
   }
 
+  // ── URLhaus API — Recent malicious URLs ───────────────────
+  function parseURLhausDate(dateStr) {
+    if (!dateStr) return new Date().toISOString();
+    // "2026-03-08 15:16:23 UTC" → ISO
+    return new Date(dateStr.replace(' UTC', 'Z').replace(' ', 'T')).toISOString();
+  }
+
+  async function fetchURLhaus(limit = 30) {
+    const apiUrl = 'https://urlhaus.abuse.ch/downloads/json_recent/';
+    const proxies = [
+      url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      url => url
+    ];
+
+    for (const proxy of proxies) {
+      try {
+        const url = proxy(apiUrl);
+        const resp = await Promise.race([fetch(url), timeout(15000)]);
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        if (!data || typeof data !== 'object') continue;
+
+        const entries = Object.keys(data)
+          .filter(k => !isNaN(k))
+          .slice(0, limit);
+
+        const mapped = entries.map(key => {
+          const entry = Array.isArray(data[key]) ? data[key][0] : data[key];
+          if (!entry) return null;
+          return {
+            id: `urlhaus-${key}`,
+            organization: entry.url || 'Unknown URL',
+            group: entry.threat || 'Unknown',
+            country: 'Unknown',
+            countryCode: 'XX',
+            sector: (entry.tags || []).join(', ') || 'Malware',
+            discovered: parseURLhausDate(entry.dateadded),
+            description: `${entry.threat || 'malware'}: ${entry.url || ''} [${(entry.tags || []).join(', ')}]`,
+            website: entry.urlhaus_reference || '',
+            source: 'urlhaus',
+            threatType: 'malware_url',
+            type: 'ransomware'
+          };
+        }).filter(Boolean);
+
+        console.log(`[API] URLhaus: ${mapped.length} malicious URLs`);
+        return mapped;
+      } catch (err) {
+        continue;
+      }
+    }
+    console.warn('[API] URLhaus unreachable');
+    return [];
+  }
+
+  // ── ThreatFox API — Recent IOCs ───────────────────────────
+  async function fetchThreatFox(limit = 30) {
+    const apiUrl = 'https://threatfox.abuse.ch/export/json/recent/';
+    const proxies = [
+      url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+      url => url
+    ];
+
+    for (const proxy of proxies) {
+      try {
+        const url = proxy(apiUrl);
+        const resp = await Promise.race([fetch(url), timeout(15000)]);
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        if (!data || typeof data !== 'object') continue;
+
+        const entries = Object.keys(data)
+          .filter(k => !isNaN(k))
+          .slice(0, limit);
+
+        const mapped = entries.map(key => {
+          const entry = Array.isArray(data[key]) ? data[key][0] : data[key];
+          if (!entry) return null;
+          return {
+            id: `tf-${key}`,
+            organization: entry.ioc_value || 'Unknown IOC',
+            group: entry.malware_printable || entry.malware || 'Unknown',
+            country: 'Unknown',
+            countryCode: 'XX',
+            sector: entry.threat_type || 'IOC',
+            discovered: entry.first_seen_utc || new Date().toISOString(),
+            description: `${entry.threat_type || 'ioc'}: ${entry.ioc_type || ''} ${entry.ioc_value || ''} — ${entry.malware_printable || ''}`,
+            website: entry.reference || '',
+            source: 'threatfox',
+            threatType: 'ioc',
+            type: 'ransomware'
+          };
+        }).filter(Boolean);
+
+        console.log(`[API] ThreatFox: ${mapped.length} IOCs`);
+        return mapped;
+      } catch (err) {
+        continue;
+      }
+    }
+    console.warn('[API] ThreatFox unreachable');
+    return [];
+  }
+
+  // ── InQuest Labs IOC DB ───────────────────────────────────
+  async function fetchInQuestIOCs(limit = 30) {
+    const apiUrl = `https://labs.inquest.net/api/iocdb/list?limit=${Math.min(limit, 50)}`;
+
+    // Try direct first (InQuest may support CORS), then proxies
+    const proxies = [
+      url => url,
+      url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+      url => `https://corsproxy.io/?${encodeURIComponent(url)}`
+    ];
+
+    for (const proxy of proxies) {
+      try {
+        const url = proxy(apiUrl);
+        const resp = await Promise.race([fetch(url), timeout(12000)]);
+        if (!resp.ok) continue;
+        const data = await resp.json();
+        const items = data.data || data;
+        if (!Array.isArray(items) || items.length === 0) continue;
+
+        const mapped = items.slice(0, limit).map((item, i) => ({
+          id: `inquest-${i}-${(item.artifact || '').slice(0, 12)}`,
+          organization: item.artifact || 'Unknown',
+          group: item.artifact_type || 'IOC',
+          country: 'Unknown',
+          countryCode: 'XX',
+          sector: item.artifact_type || 'IOC',
+          discovered: item.created_date || new Date().toISOString(),
+          description: `${item.artifact_type || 'IOC'}: ${item.artifact || ''} — ${(item.reference_text || '').slice(0, 120)}`,
+          website: item.reference_link || '',
+          source: 'inquest',
+          threatType: 'ioc',
+          type: 'ransomware'
+        }));
+
+        console.log(`[API] InQuest: ${mapped.length} IOCs`);
+        return mapped;
+      } catch (err) {
+        continue;
+      }
+    }
+    console.warn('[API] InQuest unreachable');
+    return [];
+  }
+
+  // ── Have I Been Pwned — Recent Breaches ───────────────────
+  async function fetchHIBPBreaches(limit = 30) {
+    const apiUrl = 'https://haveibeenpwned.com/api/v3/breaches';
+
+    try {
+      const resp = await Promise.race([
+        fetch(apiUrl, { headers: { 'User-Agent': 'CyberVulnDB/2.0' } }),
+        timeout(12000)
+      ]);
+      if (!resp.ok) throw new Error(`HIBP ${resp.status}`);
+      const breaches = await resp.json();
+      if (!Array.isArray(breaches)) throw new Error('Bad HIBP response');
+
+      const sorted = breaches
+        .sort((a, b) => new Date(b.ModifiedDate || b.AddedDate || 0) - new Date(a.ModifiedDate || a.AddedDate || 0))
+        .slice(0, limit);
+
+      const mapped = sorted.map(breach => ({
+        id: `hibp-${breach.Name}`,
+        organization: breach.Title || breach.Name,
+        group: 'Data Breach',
+        country: 'Unknown',
+        countryCode: 'XX',
+        sector: (breach.DataClasses || []).slice(0, 3).join(', ') || 'Breach',
+        discovered: breach.ModifiedDate || breach.AddedDate || new Date().toISOString(),
+        description: `${breach.Title || breach.Name} (${breach.Domain || ''}) — ${(breach.PwnCount || 0).toLocaleString()} accounts compromised`,
+        website: `https://haveibeenpwned.com/breaches#${breach.Name}`,
+        source: 'hibp',
+        threatType: 'breach',
+        pwnCount: breach.PwnCount,
+        type: 'ransomware'
+      }));
+
+      console.log(`[API] HIBP: ${mapped.length} breaches`);
+      return mapped;
+    } catch (err) {
+      console.warn('[API] HIBP unreachable:', err.message);
+      return [];
+    }
+  }
+
+  // ── Unified malware/threat source fetcher ─────────────────
+  async function fetchAllMalwareSources(limit = 30) {
+    const results = await Promise.allSettled([
+      fetchLiveRansomware().then(r => r || getMockRansomware()),
+      fetchURLhaus(limit),
+      fetchThreatFox(limit),
+      fetchInQuestIOCs(limit),
+      fetchHIBPBreaches(limit)
+    ]);
+
+    let merged = [];
+    const labels = ['ransomware.live', 'URLhaus', 'ThreatFox', 'InQuest', 'HIBP'];
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+        console.log(`[API] ${labels[i]}: ${r.value.length} items merged`);
+        merged = merged.concat(r.value);
+      } else {
+        console.warn(`[API] ${labels[i]}: failed or empty`);
+      }
+    });
+
+    // Sort by discovered date newest first
+    merged.sort((a, b) => new Date(b.discovered || 0) - new Date(a.discovered || 0));
+    const final = merged.slice(0, limit);
+    console.log(`[API] All malware sources merged: ${final.length} items from ${merged.length} total`);
+    return final;
+  }
+
+  async function fetchMalwareBySource(source = 'all', limit = 30) {
+    switch (source) {
+      case 'ransomware-victims': return (await fetchLiveRansomware()) || getMockRansomware();
+      case 'urlhaus': return fetchURLhaus(limit);
+      case 'threatfox': return fetchThreatFox(limit);
+      case 'inquest': return fetchInQuestIOCs(limit);
+      case 'hibp': return fetchHIBPBreaches(limit);
+      case 'all': return fetchAllMalwareSources(limit);
+      default: return fetchRansomware();
+    }
+  }
+
   // Mock Ransomware data (fallback)
   function getMockRansomware() {
     const now = new Date();
@@ -703,6 +1105,122 @@ const API = (() => {
     ];
   }
 
+  // ── MISP Galaxy — Comprehensive threat actor database ────
+  const MISP_GALAXY_URL = 'https://raw.githubusercontent.com/MISP/misp-galaxy/main/clusters/threat-actor.json';
+
+  async function fetchMISPGalaxy(limit = 50) {
+    if (mispCache && mispCacheTime && (Date.now() - mispCacheTime < MISP_CACHE_DURATION)) {
+      console.log(`[API] MISP Galaxy: ${mispCache.length} threat actors (cached)`);
+      return mispCache.slice(0, limit);
+    }
+
+    try {
+      const res = await Promise.race([fetch(MISP_GALAXY_URL), timeout(15000)]);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const values = data.values || [];
+
+      const actors = values.map((entry, index) => ({
+        id: entry.uuid || `misp-${index}`,
+        name: entry.value,
+        aliases: entry.meta?.synonyms || [],
+        country: entry.meta?.country || 'Unknown',
+        targetSectors: entry.meta?.['cfr-target-category'] || [],
+        suspectedVictims: entry.meta?.['cfr-suspected-victims'] || [],
+        description: entry.description || `Threat actor: ${entry.value}`,
+        techniques: [],
+        refs: entry.meta?.refs || [],
+        source: 'misp',
+        type: 'apt'
+      }));
+
+      // Sort: actors with country attribution first, then by name
+      actors.sort((a, b) => {
+        const aHasCountry = a.country !== 'Unknown' ? 0 : 1;
+        const bHasCountry = b.country !== 'Unknown' ? 0 : 1;
+        if (aHasCountry !== bHasCountry) return aHasCountry - bHasCountry;
+        return a.name.localeCompare(b.name);
+      });
+
+      mispCache = actors;
+      mispCacheTime = Date.now();
+      console.log(`[API] MISP Galaxy: ${actors.length} threat actors`);
+      return actors.slice(0, limit);
+    } catch (err) {
+      console.warn('[API] MISP Galaxy fetch failed:', err.message);
+      return [];
+    }
+  }
+
+  // ── APT RSS feeds — Recent threat actor activity ───────
+  const APT_RSS_FEEDS = [
+    { name: 'Mandiant',    key: 'mandiant',    url: 'https://www.mandiant.com/resources/blog/rss.xml' },
+    { name: 'CrowdStrike', key: 'crowdstrike', url: 'https://www.crowdstrike.com/blog/feed/' },
+    { name: 'Securelist',  key: 'securelist',  url: 'https://securelist.com/feed/' },
+  ];
+
+  async function fetchAPTNews(sourceKey = null) {
+    const feeds = sourceKey
+      ? APT_RSS_FEEDS.filter(f => f.key === sourceKey)
+      : APT_RSS_FEEDS;
+
+    const results = await Promise.allSettled(
+      feeds.map(feed => fetchRSSWithFallbacks({
+        ...feed,
+        category: 'apt'
+      }))
+    );
+
+    const items = [];
+    results.forEach((result, i) => {
+      if (result.status === 'fulfilled' && result.value.length > 0) {
+        result.value.forEach((item, j) => {
+          items.push({
+            id: `apt-rss-${feeds[i].key}-${j}`,
+            name: item.title || 'Untitled',
+            aliases: [],
+            country: 'Unknown',
+            targetSectors: [],
+            description: item.description || '',
+            techniques: [],
+            source: feeds[i].key,
+            published: item.published || new Date().toISOString(),
+            link: item.link || '',
+            type: 'apt'
+          });
+        });
+      }
+    });
+
+    return items;
+  }
+
+  // ── APT source dispatcher ─────────────────────────────
+  async function fetchAllAPTSources(limit = 50) {
+    const [misp, rss] = await Promise.allSettled([
+      fetchMISPGalaxy(limit),
+      fetchAPTNews()
+    ]);
+
+    const mispActors = misp.status === 'fulfilled' ? misp.value : [];
+    const rssItems = rss.status === 'fulfilled' ? rss.value : [];
+
+    const merged = [...mispActors, ...rssItems];
+    return merged.slice(0, limit);
+  }
+
+  async function fetchAPTBySource(source = 'all', limit = 50) {
+    switch (source) {
+      case 'misp':        return fetchMISPGalaxy(limit);
+      case 'static':      return getMockAPT();
+      case 'mandiant':    return fetchAPTNews('mandiant');
+      case 'crowdstrike': return fetchAPTNews('crowdstrike');
+      case 'securelist':  return fetchAPTNews('securelist');
+      case 'all':         return fetchAllAPTSources(limit);
+      default:            return getMockAPT();
+    }
+  }
+
   // Country coordinates for map
   const COUNTRY_COORDS = {
     US: [37.0902, -95.7129], CN: [35.8617, 104.1954], RU: [61.5240, 105.3188],
@@ -728,8 +1246,8 @@ const API = (() => {
 
   // Main entry: load all data
   async function loadAllData() {
-    const CACHE_KEY = 'cybervulndb_data_v4';
-    const CACHE_TS_KEY = 'cybervulndb_ts_v4';
+    const CACHE_KEY = 'cybervulndb_data_v5';
+    const CACHE_TS_KEY = 'cybervulndb_ts_v5';
     const CACHE_MAX_AGE = 15 * 60 * 1000; // 15 minutes
 
     const cachedTs = Utils.storageGet(CACHE_TS_KEY);
@@ -745,14 +1263,22 @@ const API = (() => {
     
     // Load data with resilient fallbacks — all live sources in parallel
     const [cves, ransomware, news] = await Promise.all([
-      fetchCVEs(30),
-      fetchRansomware(),
+      fetchAllCVESources(30),
+      fetchAllMalwareSources(50),
       Promise.race([
         fetchAllNews().catch(() => []),
         timeout(20000).catch(() => [])
       ])
     ]);
-    const apt = getMockAPT();
+    let apt;
+    try {
+      apt = await fetchAllAPTSources(50);
+    } catch (e) {
+      apt = getMockAPT();
+    }
+
+    // EPSS enrichment (fetchAllCVESources already enriches, but ensure coverage)
+    await enrichWithEPSS(cves);
 
     const data = { cves, ransomware, apt, news };
     
@@ -774,12 +1300,22 @@ const API = (() => {
     fetchCVEs,
     fetchCVEsOnly,
     fetchCVEsBySource,
+    fetchCVEsFromCVEOrg,
+    enrichWithEPSS,
     fetchRansomware,
+    fetchMalwareBySource,
+    fetchURLhaus,
+    fetchThreatFox,
+    fetchInQuestIOCs,
+    fetchHIBPBreaches,
     fetchAllNews,
     fetchNewsOnly,
+    fetchNewsBySource,
     fetchKEV,
     isInKEV,
     getKEVDetails,
+    fetchMISPGalaxy,
+    fetchAPTBySource,
     getCoords,
     COUNTRY_COORDS,
     COUNTRY_KEYWORDS
