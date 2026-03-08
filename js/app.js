@@ -25,7 +25,7 @@
   async function loadAndRender() {
     let data = { cves: [], ransomware: [], apt: [], news: [] };
     let sourceOk = false;
-    
+
     try {
       data = await API.loadAllData();
       sourceOk = true;
@@ -36,6 +36,9 @@
 
     // Store data globally for UI to access
     window.cyberData = data;
+
+    // Clear existing markers before re-rendering
+    MapManager.clearMarkers();
 
     // Render all panels
     renderCVEs(data.cves);
@@ -74,40 +77,56 @@
   // ── Render functions ──────────────────────────────────────
   // Store current filter
   let currentSeverityFilter = '';
-  
+  let cachedKEVList = null;
+
+  // Load KEV data (non-blocking)
+  function loadKEVData() {
+    if (!cachedKEVList) {
+      API.fetchKEV().then(kev => {
+        cachedKEVList = kev || [];
+      }).catch(() => {
+        cachedKEVList = [];
+      });
+    }
+  }
+
   function renderCVEs(cves) {
     const container = document.getElementById('cve-list');
     if (!container) return;
-    
+
     // Sort by date (newest first)
     cves.sort((a, b) => new Date(b.published) - new Date(a.published));
-    
+
     // Apply severity filter if set
     let filteredCves = cves;
     if (currentSeverityFilter) {
-      filteredCves = cves.filter(c => c.cvss.severity === currentSeverityFilter);
+      filteredCves = cves.filter(c => c.cvss && c.cvss.severity === currentSeverityFilter);
     }
-    
+
     if (!filteredCves.length) {
       container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">⟩</div><div class="empty-state-text">No CVEs found</div></div>';
       return;
     }
 
+    // Start loading KEV data (non-blocking)
+    loadKEVData();
+
     container.innerHTML = filteredCves.map(cve => {
-      const severityClass = getSeverityClass(cve.cvss.severity);
+      const severityClass = getSeverityClass(cve.cvss?.severity);
       const countryCode = detectCountryFromText(cve.description);
       const coords = API.getCoords(countryCode);
-      
+      const isKEV = cachedKEVList && cachedKEVList.length > 0 && API.isInKEV(cve.id, cachedKEVList);
+
       return `
-        <div class="threat-card cve" data-id="${cve.id}" data-coords="${coords.join(',')}">
+        <div class="threat-card cve ${isKEV ? 'kev' : ''}" data-id="${cve.id}" data-coords="${coords.join(',')}" onclick="window.showCVEModalById && window.showCVEModalById('${cve.id}')">
           <div class="threat-card-header">
-            <span class="threat-card-type">CVE</span>
+            <span class="threat-card-type">${isKEV ? '⚠ CVE (KEV)' : 'CVE'}</span>
             <span class="threat-card-date">${formatDate(cve.published)}</span>
           </div>
           <div class="threat-card-title">${escapeHtml(cve.description.substring(0, 100))}...</div>
           <div class="threat-card-meta">
             <span class="cve-id">${cve.id}</span>
-            <span class="badge ${severityClass}">${cve.cvss.score.toFixed(1)}</span>
+            <span class="badge ${severityClass}">${cve.cvss?.score?.toFixed(1) || 'N/A'}</span>
           </div>
         </div>
       `;
@@ -116,6 +135,7 @@
     // Add click handlers
     container.querySelectorAll('.threat-card').forEach(card => {
       card.addEventListener('click', (e) => {
+        console.log('[App] Card clicked:', card.dataset.id);
         e.preventDefault();
         e.stopPropagation();
         try {
@@ -253,7 +273,8 @@
 
   // ── Helper functions ─────────────────────────────────────
   function getSeverityClass(severity) {
-    const s = severity?.toUpperCase() || '';
+    if (!severity) return 'info';
+    const s = String(severity).toUpperCase();
     if (s === 'CRITICAL') return 'critical';
     if (s === 'HIGH') return 'high';
     if (s === 'MEDIUM') return 'medium';
@@ -293,28 +314,75 @@
     return div.innerHTML;
   }
 
+  // Global function to show CVE modal by ID (for onclick handlers)
+  window.showCVEModalById = function(cveId) {
+    const data = window.cyberData;
+    if (!data || !data.cves) return;
+    const cve = data.cves.find(c => c.id === cveId);
+    if (cve) showCVEModal(cve);
+  };
+
   // ── Modal functions ─────────────────────────────────────
   function showCVEModal(cve) {
     const overlay = document.getElementById('modal-overlay');
     const content = document.getElementById('modal-content');
     if (!overlay || !content) return;
 
+    const severityClass = getSeverityClass(cve.cvss?.severity);
+
+    // Build references list
+    const refs = cve.references?.length > 0
+      ? cve.references.map(ref => `<a href="${escapeHtml(ref)}" target="_blank" class="modal-link">${escapeHtml(ref.substring(0, 60))}...</a>`).join('<br>')
+      : '';
+
+    // Build CPE list
+    const cpeList = cve.cpe?.length > 0
+      ? cve.cpe.slice(0, 5).map(c => `<span class="cpe-tag">${escapeHtml(c)}</span>`).join(' ')
+      : '<span class="text-muted">No CPE data</span>';
+
     content.innerHTML = `
       <div class="modal-header">
         <div>
-          <div class="modal-type-badge badge-${getSeverityClass(cve.cvss.severity)}">CVE</div>
+          <div class="modal-type-badge badge-${severityClass}">CVE</div>
           <div class="modal-title">${cve.id}</div>
         </div>
         <button class="modal-close" onclick="document.getElementById('modal-overlay').classList.add('hidden')">×</button>
       </div>
       <div class="modal-body">
         <div class="modal-meta-row">
-          <span class="badge ${getSeverityClass(cve.cvss.severity)}">CVSS: ${cve.cvss.score}</span>
-          <span>${cve.cvss.severity}</span>
+          ${cve.cvss?.score ? `<span class="badge ${severityClass}">CVSS: ${cve.cvss.score.toFixed(1)}</span>` : ''}
+          ${cve.cvss?.severity ? `<span class="badge info">${cve.cvss.severity}</span>` : ''}
           <span>Published: ${formatDate(cve.published)}</span>
+          ${cve.modified ? `<span>Modified: ${formatDate(cve.modified)}</span>` : ''}
         </div>
-        <p class="modal-description">${cve.description}</p>
-        ${cve.references.length ? `<a href="${cve.references[0]}" target="_blank" class="btn-primary">View on NVD</a>` : ''}
+
+        <div class="modal-section">
+          <h4>Description</h4>
+          <p class="modal-description">${escapeHtml(cve.description)}</p>
+        </div>
+
+        ${cve.cvss?.vector ? `
+        <div class="modal-section">
+          <h4>CVSS Vector</h4>
+          <code class="cvss-vector">${escapeHtml(cve.cvss.vector)}</code>
+        </div>
+        ` : ''}
+
+        <div class="modal-section">
+          <h4>Affected Products (CPE)</h4>
+          <div class="cpe-list">${cpeList}</div>
+        </div>
+
+        ${refs ? `
+        <div class="modal-section">
+          <h4>References</h4>
+          <div class="modal-references">${refs}</div>
+        </div>
+        ` : ''}
+
+        <div class="modal-actions">
+          <a href="https://nvd.nist.gov/vuln/detail/${cve.id}" target="_blank" class="btn-primary">View on NVD →</a>
+        </div>
       </div>
     `;
     
@@ -400,7 +468,7 @@
   function initFilters() {
     const cveFilter = document.getElementById('cve-severity-filter');
     if (cveFilter) {
-      cveFilter.addEventListener('change', () => {
+      cveFilter.addEventListener('change', async () => {
         currentSeverityFilter = cveFilter.value;
         const data = window.cyberData || { cves: [] };
         renderCVEs(data.cves);
@@ -426,11 +494,16 @@
     const searchInput = document.getElementById('search-input');
     if (!searchInput) return;
 
-    searchInput.addEventListener('input', (e) => {
+    searchInput.addEventListener('input', async (e) => {
       const query = e.target.value.toLowerCase();
       if (!query) {
-        // Reset views
-        loadAndRender();
+        // Reset views using current data (don't re-fetch)
+        const data = window.cyberData || { cves: [], ransomware: [], apt: [], news: [] };
+        MapManager.clearMarkers();
+        renderCVEs(data.cves);
+        renderRansomware(data.ransomware);
+        renderAPT(data.apt);
+        renderNews(data.news);
         return;
       }
 
@@ -468,6 +541,17 @@
   // Map reset button
   const resetBtn = document.getElementById('reset-view-btn');
   if (resetBtn) resetBtn.addEventListener('click', () => MapManager.resetView());
+
+  // Heatmap toggle button
+  const heatmapBtn = document.getElementById('heatmap-toggle');
+  if (heatmapBtn) {
+    heatmapBtn.addEventListener('click', () => {
+      const active = MapManager.toggleHeatmap();
+      heatmapBtn.classList.toggle('active', active);
+      heatmapBtn.style.color = active ? 'var(--accent-cyan)' : '';
+      heatmapBtn.style.borderColor = active ? 'var(--accent-cyan)' : '';
+    });
+  }
 
   // ── Kick off ───────────────────────────────────────────
   await loadAndRender();

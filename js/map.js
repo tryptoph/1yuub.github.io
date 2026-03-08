@@ -5,6 +5,8 @@
 const MapManager = (() => {
   let map = null;
   let markers = [];
+  let heatmapLayer = null;
+  let heatmapVisible = false;
 
   const TYPE_ICONS = {
     cve: '⚡',
@@ -98,16 +100,76 @@ const MapManager = (() => {
     }
   }
 
+  function toggleHeatmap() {
+    if (!map) return;
+
+    heatmapVisible = !heatmapVisible;
+
+    if (heatmapVisible) {
+      // Create simple heatmap using circle markers
+      const heatData = markers.map(m => ({
+        lat: m.getLatLng().lat,
+        lng: m.getLatLng().lng,
+        type: m._type
+      }));
+
+      // Group by location
+      const locationMap = new Map();
+      heatData.forEach(point => {
+        const key = `${point.lat.toFixed(1)},${point.lng.toFixed(1)}`;
+        if (!locationMap.has(key)) {
+          locationMap.set(key, { lat: point.lat, lng: point.lng, count: 0, types: new Set() });
+        }
+        const loc = locationMap.get(key);
+        loc.count++;
+        loc.types.add(point.type);
+      });
+
+      // Create heat circles
+      heatmapLayer = [];
+      locationMap.forEach(loc => {
+        const intensity = Math.min(loc.count / 5, 1);
+        const radius = 20 + loc.count * 10;
+        const color = loc.types.has('ransomware') ? 'rgba(255, 45, 85,' :
+                     loc.types.has('cve') ? 'rgba(245, 158, 11,' :
+                     loc.types.has('apt') ? 'rgba(139, 92, 246,' :
+                     'rgba(59, 130, 246,';
+
+        const circle = L.circleMarker([loc.lat, loc.lng], {
+          radius: radius / 4,
+          fillColor: color + (0.1 + intensity * 0.3) + ')',
+          color: color + (0.3 + intensity * 0.4) + ')',
+          weight: 1,
+          opacity: 0.5,
+          fillOpacity: 0.4
+        }).addTo(map);
+        heatmapLayer.push(circle);
+      });
+
+      console.log('[Map] Heatmap enabled with', locationMap.size, 'clusters');
+      return true;
+    } else {
+      // Remove heatmap
+      if (heatmapLayer) {
+        heatmapLayer.forEach(circle => map.removeLayer(circle));
+        heatmapLayer = null;
+      }
+      console.log('[Map] Heatmap disabled');
+      return false;
+    }
+  }
+
   function getMap() {
     return map;
   }
 
-  return { 
-    init, 
-    addMarker, 
-    clearMarkers, 
-    flyTo, 
-    resetView, 
+  return {
+    init,
+    addMarker,
+    clearMarkers,
+    flyTo,
+    resetView,
+    toggleHeatmap,
     getMap,
     TYPE_COLORS
   };

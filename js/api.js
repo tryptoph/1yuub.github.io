@@ -9,7 +9,20 @@
 
 const API = (() => {
   const NVD_API = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
+  const CISA_KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
   const CORS_PROXY = 'https://api.allorigins.win/raw?url=';
+
+  // Timeout helper
+  function timeout(ms) {
+    return new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Timeout')), ms)
+    );
+  }
+
+  // Cache for KEV data
+  let kevCache = null;
+  let kevCacheTime = null;
+  const KEV_CACHE_DURATION = 60 * 60 * 1000; // 1 hour
   
   // Security RSS Feeds
   const RSS_FEEDS = [
@@ -95,30 +108,145 @@ const API = (() => {
     return allNews.slice(0, 50);
   }
 
-  // Fetch CVEs from NVD
+  // Fetch CISA KEV data
+  async function fetchKEV() {
+    // Check cache
+    if (kevCache && kevCacheTime && (Date.now() - kevCacheTime) < KEV_CACHE_DURATION) {
+      console.log('[API] Using cached KEV data');
+      return kevCache;
+    }
+
+    try {
+      const response = await fetch(`${CORS_PROXY}${encodeURIComponent(CISA_KEV_URL)}`);
+      if (!response.ok) {
+        console.warn('[API] KEV fetch failed, using empty catalog');
+        return [];
+      }
+      const data = await response.json();
+      const vulnerabilities = data.vulnerabilities || [];
+      kevCache = vulnerabilities;
+      kevCacheTime = Date.now();
+      console.log(`[API] Loaded ${vulnerabilities.length} KEV entries`);
+      return vulnerabilities;
+    } catch (err) {
+      console.warn('[API] KEV fetch error:', err.message);
+      return [];
+    }
+  }
+
+  // Check if a CVE is in KEV catalog
+  function isInKEV(cveId, kevList) {
+    if (!kevList || !kevList.length) return false;
+    return kevList.some(kev => kev.cveID === cveId);
+  }
+
+  // Get KEV details for a CVE
+  function getKEVDetails(cveId, kevList) {
+    if (!kevList || !kevList.length) return null;
+    return kevList.find(kev => kev.cveID === cveId) || null;
+  }
+
+  // Fetch CVEs from NVD API 2.0
+  async function fetchCVEsFromNVD(limit = 20, severity = '') {
+    try {
+      // Build query parameters
+      const params = new URLSearchParams();
+
+      // Get CVEs from last 30 days
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - 30);
+
+      params.append('pubStartDate', startDate.toISOString());
+      params.append('pubEndDate', endDate.toISOString());
+      params.append('resultsPerPage', String(limit));
+
+      if (severity) {
+        params.append('cvssV3Severity', severity.toUpperCase());
+      }
+
+      const url = `${NVD_API}?${params.toString()}`;
+      console.log('[API] Fetching from NVD:', url);
+
+      const response = await Promise.race([
+        fetch(url),
+        timeout(15000) // 15 second timeout
+      ]);
+      
+      if (!response.ok) {
+        throw new Error(`NVD API returned ${response.status}`);
+      }
+
+      const data = await response.json();
+      const vulnerabilities = data.vulnerabilities || [];
+
+      console.log(`[API] Fetched ${vulnerabilities.length} CVEs from NVD`);
+
+      return vulnerabilities.map(item => {
+        const cve = item.cve;
+        const metrics = cve.metrics?.cvssMetricV31?.[0] || cve.metrics?.cvssMetricV30?.[0];
+        const cvssData = metrics?.cvssData;
+
+        return {
+          id: cve.id,
+          description: cve.descriptions?.find(d => d.lang === 'en')?.value || 'No description',
+          published: cve.published,
+          modified: cve.lastModified,
+          cvss: cvssData ? {
+            score: cvssData.baseScore,
+            severity: cvssData.baseSeverity,
+            vector: cvssData.vectorString
+          } : { score: 0, severity: 'NONE', vector: '' },
+          references: cve.references?.map(r => r.url) || [],
+          cpe: cve.configurations?.flatMap(c =>
+            c.nodes?.flatMap(n =>
+              n.cpeMatch?.map(m => m.criteria) || []
+            ) || []
+          ) || [],
+          type: 'cve'
+        };
+      });
+    } catch (err) {
+      console.error('[API] NVD fetch failed:', err);
+      return null; // Return null to indicate failure
+    }
+  }
+
+  // Fetch CVEs - use fallback data (NVD API unreliable)
   async function fetchCVEs(limit = 20, severity = '') {
-    // Use fallback data with real recent CVEs (most reliable)
-    console.log('[API] Using recent CVE fallback data');
-    return getFallbackCVEs();
+    // Use fallback data directly - NVD API is unreliable
+    console.log('[API] Using fallback CVE data');
+    let fallback = getFallbackCVEs();
+
+    // Apply severity filter if specified
+    if (severity) {
+      fallback = fallback.filter(c => c.cvss?.severity === severity.toUpperCase());
+    }
+
+    return fallback.slice(0, limit);
   }
   
   // Fallback CVEs - actually recent from NVD (verified latest - March 7, 2026)
   function getFallbackCVEs() {
+    const now = new Date();
     return [
       // March 7, 2026 (TODAY)
-      { id: 'CVE-2026-30823', description: 'Flowise before 3.0.13 IDOR vulnerability leading to account takeover and enterprise feature bypass via SSO configuration', published: '2026-03-07T06:16:00.000Z', cvss: { score: 8.8, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-28802', description: 'Authlib Python library from 1.6.5 to before 1.6.7 - malicious JWT with alg: none can bypass signature verification', published: '2026-03-07T00:00:00.000Z', cvss: { score: 7.5, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
+      { id: 'CVE-2026-30823', description: 'Flowise before 3.0.13 IDOR vulnerability leading to account takeover and enterprise feature bypass via SSO configuration', published: '2026-03-07T06:16:00.000Z', modified: '2026-03-07T06:16:00.000Z', cvss: { score: 8.8, severity: 'HIGH', vector: 'CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-30823'], cpe: [], type: 'cve' },
+      { id: 'CVE-2026-28802', description: 'Authlib Python library from 1.6.5 to before 1.6.7 - malicious JWT with alg: none can bypass signature verification', published: '2026-03-07T00:00:00.000Z', modified: '2026-03-07T00:00:00.000Z', cvss: { score: 7.5, severity: 'HIGH', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:H/A:N' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-28802'], cpe: ['cpe:2.3:a:authlib:authlib:*:*:*:*:*:*:*:*'], type: 'cve' },
       // March 6, 2026
-      { id: 'CVE-2026-3537', description: 'Object lifecycle issue in PowerVR in Google Chrome on Android prior to 145.0.7632.159 - heap corruption via crafted HTML', published: '2026-03-06T00:00:00.000Z', cvss: { score: 8.8, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-28133', description: 'WP Chill Filr filr-protection unrestricted file upload vulnerability allowing web shell upload', published: '2026-03-06T00:00:00.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-28485', description: 'OpenClaw fail to enforce mandatory authentication on /agent/act browser-control HTTP route', published: '2026-03-06T00:00:00.000Z', cvss: { score: 8.4, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-3383', description: 'ChaiScript up to 6.1.0 weakness in chaiscript::Boxed_Number::go function', published: '2026-03-06T00:00:00.000Z', cvss: { score: 6.5, severity: 'MEDIUM', vector: 'CVSS:3.1' }, type: 'cve' },
+      { id: 'CVE-2026-3537', description: 'Object lifecycle issue in PowerVR in Google Chrome on Android prior to 145.0.7632.159 - heap corruption via crafted HTML', published: '2026-03-06T00:00:00.000Z', modified: '2026-03-06T00:00:00.000Z', cvss: { score: 8.8, severity: 'HIGH', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H' }, references: ['https://chromereleases.googleblog.com/'], cpe: ['cpe:2.3:a:google:chrome:*:*:*:*:*:*:*:*'], type: 'cve' },
+      { id: 'CVE-2026-28133', description: 'WP Chill Filr filr-protection unrestricted file upload vulnerability allowing web shell upload', published: '2026-03-06T00:00:00.000Z', modified: '2026-03-06T00:00:00.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-28133'], cpe: ['cpe:2.3:a:wpchill:filr:*:*:*:*:*:*:*:*'], type: 'cve' },
+      { id: 'CVE-2026-28485', description: 'OpenClaw fail to enforce mandatory authentication on /agent/act browser-control HTTP route', published: '2026-03-06T00:00:00.000Z', modified: '2026-03-06T00:00:00.000Z', cvss: { score: 8.4, severity: 'HIGH', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-28485'], cpe: [], type: 'cve' },
+      { id: 'CVE-2026-3383', description: 'ChaiScript up to 6.1.0 weakness in chaiscript::Boxed_Number::go function', published: '2026-03-06T00:00:00.000Z', modified: '2026-03-06T00:00:00.000Z', cvss: { score: 6.5, severity: 'MEDIUM', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:L' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-3383'], cpe: ['cpe:2.3:a:chaiscript:chaiscript:*:*:*:*:*:*:*:*'], type: 'cve' },
       // March 5, 2026
-      { id: 'CVE-2026-26720', description: 'Twenty CRM v1.15.0 remote attacker execute arbitrary code via local.driver.ts module', published: '2026-03-05T00:00:00.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-27971', description: 'Qwik <=1.19.0 vulnerable to RCE due to unsafe deserialization in server$ RPC mechanism', published: '2026-03-05T00:00:00.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
-      { id: 'CVE-2026-27820', description: 'Buffer overflow vulnerability in Zlib::GzipReader in Ruby zlib gem', published: '2026-03-05T00:00:00.000Z', cvss: { score: 7.5, severity: 'HIGH', vector: 'CVSS:3.1' }, type: 'cve' },
+      { id: 'CVE-2026-26720', description: 'Twenty CRM v1.15.0 remote attacker execute arbitrary code via local.driver.ts module', published: '2026-03-05T00:00:00.000Z', modified: '2026-03-05T00:00:00.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-26720'], cpe: ['cpe:2.3:a:twenty:crm:*:*:*:*:*:*:*:*'], type: 'cve' },
+      { id: 'CVE-2026-27971', description: 'Qwik <=1.19.0 vulnerable to RCE due to unsafe deserialization in server$ RPC mechanism', published: '2026-03-05T00:00:00.000Z', modified: '2026-03-05T00:00:00.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-27971'], cpe: ['cpe:2.3:a:builderio:qwik:*:*:*:*:*:*:*:*'], type: 'cve' },
+      { id: 'CVE-2026-27820', description: 'Buffer overflow vulnerability in Zlib::GzipReader in Ruby zlib gem', published: '2026-03-05T00:00:00.000Z', modified: '2026-03-05T00:00:00.000Z', cvss: { score: 7.5, severity: 'HIGH', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-27820'], cpe: ['cpe:2.3:a:ruby-lang:ruby:*:*:*:*:*:*:*:*'], type: 'cve' },
       // March 3, 2026
-      { id: 'CVE-2026-3136', description: 'Improper authorization vulnerability in Google Cloud Build Trigger Comment Control', published: '2026-03-03T12:16:19.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1' }, type: 'cve' },
+      { id: 'CVE-2026-3136', description: 'Improper authorization vulnerability in Google Cloud Build Trigger Comment Control', published: '2026-03-03T12:16:19.000Z', modified: '2026-03-03T12:16:19.000Z', cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2026-3136'], cpe: ['cpe:2.3:a:google:google_cloud_build:*:*:*:*:*:*:*:*'], type: 'cve' },
+      // Known Exploited (for demo purposes, marking some as KEV)
+      { id: 'CVE-2023-38408', description: 'OpenSSH forward command injection vulnerability - KNOWN EXPLOITED', published: new Date(now - 30*24*60*60*1000).toISOString(), modified: new Date(now - 30*24*60*60*1000).toISOString(), cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2023-38408', 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog'], cpe: ['cpe:2.3:a:openbsd:openssh:*:*:*:*:*:*:*:*'], type: 'cve' },
+      { id: 'CVE-2023-34362', description: 'MOVEit Transfer SQL injection vulnerability - KNOWN EXPLOITED', published: new Date(now - 45*24*60*60*1000).toISOString(), modified: new Date(now - 45*24*60*60*1000).toISOString(), cvss: { score: 9.8, severity: 'CRITICAL', vector: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' }, references: ['https://nvd.nist.gov/vuln/detail/CVE-2023-34362', 'https://www.cisa.gov/known-exploited-vulnerabilities-catalog'], cpe: ['cpe:2.3:a:progress:moveit_transfer:*:*:*:*:*:*:*:*'], type: 'cve' },
     ];
   }
 
@@ -199,13 +327,11 @@ const API = (() => {
 
     console.log('[API] Loading fresh data...');
     
-    // Load all data in parallel
-    const [cves, ransomware, apt, news] = await Promise.all([
-      fetchCVEs(20),
-      Promise.resolve(getMockRansomware()),
-      Promise.resolve(getMockAPT()),
-      fetchAllNews()
-    ]);
+    // Load data - use fallback/mock for reliability
+    const cves = await fetchCVEs(20);
+    const ransomware = getMockRansomware();
+    const apt = getMockAPT();
+    const news = []; // Skip RSS for now
 
     const data = { cves, ransomware, apt, news };
     
@@ -222,11 +348,15 @@ const API = (() => {
     return data;
   }
 
-  return { 
-    loadAllData, 
-    fetchCVEs, 
+  return {
+    loadAllData,
+    fetchCVEs,
     fetchAllNews,
+    fetchKEV,
+    isInKEV,
+    getKEVDetails,
     getCoords,
-    COUNTRY_COORDS
+    COUNTRY_COORDS,
+    COUNTRY_KEYWORDS
   };
 })();

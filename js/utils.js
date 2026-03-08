@@ -90,8 +90,36 @@ const Utils = (() => {
   function storageSet(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
-    } catch {
-      // Ignore quota errors silently
+      return true;
+    } catch (err) {
+      if (err.name === 'QuotaExceededError' || err.code === 22) {
+        console.warn(`[Utils] localStorage quota exceeded for key: ${key}`);
+        // Try to clear old cache entries
+        try {
+          const keysToRemove = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith('cybervulndb_')) {
+              keysToRemove.push(k);
+            }
+          }
+          // Remove oldest entries (keep last 5)
+          if (keysToRemove.length > 5) {
+            keysToRemove.slice(0, -5).forEach(k => localStorage.removeItem(k));
+            console.log('[Utils] Cleared old cache entries');
+            // Retry once
+            try {
+              localStorage.setItem(key, JSON.stringify(value));
+              return true;
+            } catch {
+              console.error('[Utils] Still failed after clearing cache');
+            }
+          }
+        } catch (e) {
+          console.error('[Utils] Error clearing cache:', e);
+        }
+      }
+      return false;
     }
   }
 

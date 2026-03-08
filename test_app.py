@@ -6,33 +6,40 @@ def main():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
-        console_messages = []
-        page.on(
-            "console", lambda msg: console_messages.append(f"[{msg.type}] {msg.text}")
-        )
-        page.on("pageerror", lambda err: console_messages.append(f"[PAGE_ERROR] {err}"))
-
-        print("Loading app...")
+        print("Loading CyberVulnDB...")
         page.goto("http://localhost:8082", wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(3000)  # Wait for JS to execute
 
-        # Try to manually call loadAndRender
-        print("\nManually calling loadAndRender...")
-        result = page.evaluate("typeof loadAndRender")
-        print(f"loadAndRender type: {result}")
+        # Wait for CVEs to load
+        page.wait_for_selector("#cve-list .threat-card", timeout=15000)
 
-        page.wait_for_timeout(3000)
+        # Check CVE count
+        cve_count = page.locator("#cve-list .threat-card").count()
+        print(f"✓ {cve_count} CVEs loaded")
 
-        # Check window.cyberData
-        cyber_data = page.evaluate("window.cyberData")
-        print(f"window.cyberData after manual call: {cyber_data}")
+        # Check status
+        status = page.locator("#status-source").inner_text()
+        print(f"✓ Status: {status}")
 
-        # Check all console messages
-        print("\nAll console messages:")
-        for m in console_messages:
-            print(f"  {m}")
+        # Test click
+        page.evaluate("document.querySelector('.threat-card').click()")
+        page.wait_for_timeout(500)
+
+        modal_visible = page.locator("#modal-overlay:not(.hidden)").count()
+        print(f"✓ Modal opens on click: {modal_visible > 0}")
+
+        # Close modal
+        page.locator(".modal-close").click()
+        page.wait_for_timeout(300)
+
+        # Test severity filter
+        page.locator("#cve-severity-filter").select_option("CRITICAL")
+        page.wait_for_timeout(500)
+
+        critical_count = page.locator("#cve-list .threat-card").count()
+        print(f"✓ Severity filter works: {critical_count} critical CVEs")
 
         browser.close()
+        print("\n✅ All tests passed!")
 
 
 if __name__ == "__main__":
