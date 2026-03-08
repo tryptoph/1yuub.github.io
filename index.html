@@ -114,8 +114,8 @@
           <div class="cve-header-right">
             <span id="cve-last-updated" class="news-timestamp"></span>
             <select id="cve-source-filter" title="Choose CVE data source">
-              <option value="all" selected>All Sources (Merged)</option>
-              <option value="auto">⚡ Auto (Best)</option>
+              <option value="all" selected>All Sources</option>
+              <option value="auto">Smart Auto</option>
               <option value="cvelist">CVEProject (Real-time)</option>
               <option value="github">GitHub Advisory</option>
               <option value="nvd">NVD (NIST)</option>
@@ -127,6 +127,11 @@
               <option value="HIGH">High</option>
               <option value="MEDIUM">Medium</option>
               <option value="LOW">Low</option>
+            </select>
+            <select id="cve-count-filter" title="Items to load">
+              <option value="10">10</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
             </select>
           </div>
         </div>
@@ -145,12 +150,17 @@
           <div class="cve-header-right">
             <span id="malware-last-updated" class="news-timestamp"></span>
             <select id="malware-source-filter" title="Malware data source">
-              <option value="all" selected>All Sources (Merged)</option>
+              <option value="all" selected>All Sources</option>
               <option value="ransomware-victims">Ransomware Victims</option>
               <option value="urlhaus">URLhaus (URLs)</option>
               <option value="threatfox">ThreatFox (IOCs)</option>
               <option value="inquest">InQuest Labs</option>
               <option value="hibp">HIBP (Breaches)</option>
+            </select>
+            <select id="malware-count-filter" title="Items to load">
+              <option value="10">10</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
             </select>
           </div>
         </div>
@@ -181,6 +191,11 @@
               <option value="threatpost">Threatpost</option>
               <option value="hn-algolia">HackerNews (Community)</option>
             </select>
+            <select id="news-count-filter" title="Items to load">
+              <option value="10">10</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
           </div>
         </div>
         <div id="news-list" class="threat-list">
@@ -198,12 +213,17 @@
           <div class="cve-header-right">
             <span id="apt-last-updated" class="news-timestamp"></span>
             <select id="apt-source-filter" title="APT data source">
-              <option value="all" selected>All Sources (Merged)</option>
+              <option value="all" selected>All Sources</option>
               <option value="misp">MISP Galaxy (953 actors)</option>
               <option value="static">MITRE ATT&amp;CK (Curated)</option>
               <option value="mandiant">Mandiant Blog</option>
               <option value="crowdstrike">CrowdStrike Blog</option>
               <option value="securelist">Kaspersky Securelist</option>
+            </select>
+            <select id="apt-count-filter" title="Items to load">
+              <option value="10">10</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
             </select>
           </div>
         </div>
@@ -266,11 +286,11 @@
 
 <!-- Scripts -->
 <script src="lib/leaflet.js"></script>
-<script src="js/utils.js?v=9"></script>
-<script src="js/api.js?v=9"></script>
-<script src="js/map.js?v=9"></script>
-<script src="js/ui.js?v=9"></script>
-<script src="js/app.js?v=9"></script>
+<script src="js/utils.js?v=10"></script>
+<script src="js/api.js?v=10"></script>
+<script src="js/map.js?v=10"></script>
+<script src="js/ui.js?v=10"></script>
+<script src="js/app.js?v=10"></script>
 
 </body>
 </html>

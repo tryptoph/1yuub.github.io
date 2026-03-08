@@ -54,11 +54,16 @@
     // Clear existing markers before re-rendering
     MapManager.clearMarkers();
 
-    // Render all panels
-    renderCVEs(data.cves);
-    renderRansomware(data.ransomware);
-    renderAPT(data.apt);
-    renderNews(data.news);
+    // Render all panels (apply count limits from UI)
+    const cveLimit = parseInt(document.getElementById('cve-count-filter')?.value) || 50;
+    const malwareLimit = parseInt(document.getElementById('malware-count-filter')?.value) || 50;
+    const aptLimit = parseInt(document.getElementById('apt-count-filter')?.value) || 50;
+    const newsLimit = parseInt(document.getElementById('news-count-filter')?.value) || 50;
+    
+    renderCVEs(data.cves.slice(0, cveLimit));
+    renderRansomware(data.ransomware.slice(0, malwareLimit));
+    renderAPT(data.apt.slice(0, aptLimit));
+    renderNews(data.news.slice(0, newsLimit));
 
     // Update stats bar
     updateStatsBar(data);
@@ -707,16 +712,25 @@
       });
     }
 
+    // CVE count selector
+    const cveCountFilter = document.getElementById('cve-count-filter');
+    if (cveCountFilter) {
+      cveCountFilter.addEventListener('change', async () => {
+        await refetchCVESource();
+      });
+    }
+
     const newsSourceFilter = document.getElementById('news-source-filter');
     if (newsSourceFilter) {
       newsSourceFilter.addEventListener('change', async () => {
         const source = newsSourceFilter.value;
+        const limit = parseInt(document.getElementById('news-count-filter')?.value) || 50;
         const container = document.getElementById('news-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading news...</div></div>';
         }
         try {
-          const items = await API.fetchNewsBySource(source);
+          const items = await API.fetchNewsBySource(source, limit);
           if (window.cyberData) window.cyberData.news = items;
           renderNews(items);
           const badge = document.getElementById('news-count-badge');
@@ -728,20 +742,65 @@
       });
     }
 
+    // News count selector
+    const newsCountFilter = document.getElementById('news-count-filter');
+    if (newsCountFilter) {
+      newsCountFilter.addEventListener('change', async () => {
+        const source = document.getElementById('news-source-filter')?.value || 'all';
+        const limit = parseInt(newsCountFilter.value) || 50;
+        const container = document.getElementById('news-list');
+        if (container) {
+          container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading news...</div></div>';
+        }
+        try {
+          const items = await API.fetchNewsBySource(source, limit);
+          if (window.cyberData) window.cyberData.news = items;
+          renderNews(items);
+          const badge = document.getElementById('news-count-badge');
+          if (badge) badge.textContent = items.length || '';
+          UI.showToast(`Loaded ${items.length} articles`, 'info');
+        } catch (err) {
+          UI.showToast('Failed to fetch news', 'error');
+        }
+      });
+    }
+
     // Malware source selector
     const malwareFilter = document.getElementById('malware-source-filter');
     if (malwareFilter) {
       malwareFilter.addEventListener('change', async () => {
         const source = malwareFilter.value;
+        const limit = parseInt(document.getElementById('malware-count-filter')?.value) || 50;
         const container = document.getElementById('ransomware-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading from source...</div></div>';
         }
         try {
-          const items = await API.fetchMalwareBySource(source, 30);
+          const items = await API.fetchMalwareBySource(source, limit);
           if (window.cyberData) window.cyberData.ransomware = items;
           renderRansomware(items);
           UI.showToast(`Loaded ${items.length} threats from ${source === 'all' ? 'all sources' : source}`, 'info');
+        } catch (err) {
+          UI.showToast('Failed to fetch malware data', 'error');
+        }
+      });
+    }
+
+    // Malware count selector
+    const malwareCountFilter = document.getElementById('malware-count-filter');
+    if (malwareCountFilter) {
+      malwareCountFilter.addEventListener('change', async () => {
+        const source = document.getElementById('malware-source-filter')?.value || 'all';
+        const limit = parseInt(malwareCountFilter.value) || 50;
+        const container = document.getElementById('ransomware-list');
+        if (container) {
+          container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading from source...</div></div>';
+        }
+        try {
+          const items = await API.fetchMalwareBySource(source, limit);
+          if (window.cyberData) window.cyberData.ransomware = items;
+          renderRansomware(items);
+          UI.showToast(`Loaded ${items.length} threats`, 'info');
         } catch (err) {
           UI.showToast('Failed to fetch malware data', 'error');
         }
@@ -753,15 +812,37 @@
     if (aptFilter) {
       aptFilter.addEventListener('change', async () => {
         const source = aptFilter.value;
+        const limit = parseInt(document.getElementById('apt-count-filter')?.value) || 50;
         const container = document.getElementById('apt-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading APT data...</div></div>';
         }
         try {
-          const items = await API.fetchAPTBySource(source, 50);
+          const items = await API.fetchAPTBySource(source, limit);
           if (window.cyberData) window.cyberData.apt = items;
           renderAPT(items);
           UI.showToast(`Loaded ${items.length} APT groups from ${source === 'all' ? 'all sources' : source}`, 'info');
+        } catch (err) {
+          UI.showToast('Failed to fetch APT data', 'error');
+        }
+      });
+    }
+
+    // APT count selector
+    const aptCountFilter = document.getElementById('apt-count-filter');
+    if (aptCountFilter) {
+      aptCountFilter.addEventListener('change', async () => {
+        const source = document.getElementById('apt-source-filter')?.value || 'all';
+        const limit = parseInt(aptCountFilter.value) || 50;
+        const container = document.getElementById('apt-list');
+        if (container) {
+          container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading APT data...</div></div>';
+        }
+        try {
+          const items = await API.fetchAPTBySource(source, limit);
+          if (window.cyberData) window.cyberData.apt = items;
+          renderAPT(items);
+          UI.showToast(`Loaded ${items.length} APT groups`, 'info');
         } catch (err) {
           UI.showToast('Failed to fetch APT data', 'error');
         }
@@ -777,7 +858,8 @@
     }
 
     try {
-      const cves = await API.fetchCVEsBySource(currentCVESource, 30, currentSeverityFilter);
+      const limit = parseInt(document.getElementById('cve-count-filter')?.value) || 50;
+      const cves = await API.fetchCVEsBySource(currentCVESource, limit, currentSeverityFilter);
       if (window.cyberData) window.cyberData.cves = cves;
       renderCVEs(cves);
       cveLastFetchTime = Date.now();

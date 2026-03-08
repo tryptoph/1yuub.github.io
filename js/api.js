@@ -236,21 +236,24 @@ const API = (() => {
   }
 
   // Fetch news filtered by source key
-  async function fetchNewsBySource(source = 'all') {
-    if (source === 'all') return fetchAllNews();
-    if (source === 'hn-algolia') {
+  async function fetchNewsBySource(source = 'all', limit = 50) {
+    let items;
+    if (source === 'all') {
+      items = await fetchAllNews();
+    } else if (source === 'hn-algolia') {
       console.log('[API] Fetching news from HackerNews only...');
-      return fetchHackerNews();
+      items = await fetchHackerNews();
+    } else {
+      const feed = RSS_FEEDS.find(f => f.key === source);
+      if (!feed) {
+        console.warn(`[API] Unknown news source: ${source}`);
+        return [];
+      }
+      console.log(`[API] Fetching news from ${feed.name} only...`);
+      items = await fetchRSSWithFallbacks(feed);
     }
-    const feed = RSS_FEEDS.find(f => f.key === source);
-    if (!feed) {
-      console.warn(`[API] Unknown news source: ${source}`);
-      return [];
-    }
-    console.log(`[API] Fetching news from ${feed.name} only...`);
-    const items = await fetchRSSWithFallbacks(feed);
     items.sort((a, b) => new Date(b.published) - new Date(a.published));
-    return items;
+    return items.slice(0, limit);
   }
 
   // Fetch CISA KEV data
@@ -1231,7 +1234,7 @@ const API = (() => {
     // Load data with resilient fallbacks — all live sources in parallel
     // Wrap slow sources with overall timeouts to prevent blocking
     const [cves, ransomware, news, apt] = await Promise.all([
-      fetchAllCVESources(30),
+      fetchAllCVESources(50),
       Promise.race([
         fetchAllMalwareSources(50),
         timeout(30000).catch(() => getMockRansomware())
