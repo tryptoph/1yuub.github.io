@@ -2,7 +2,8 @@ node_modules/
 package-lock.json
 package.json
 
-# Design mockups and screenshots (not part of deployable code)
+# Design mockups and screenshots (now in images/ folder, tracked)
+# Root-level stray PNGs (old paths)
 dashboard-screenshot.png
 dashboard-v2.png
 dashboard-v2-final.png

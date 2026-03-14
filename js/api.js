@@ -26,6 +26,30 @@ const API = (() => {
     );
   }
 
+  // ── Time range helpers ──────────────────────────────────
+  // Returns the start Date for a given range key
+  function timeRangeToStart(range) {
+    const now = Date.now();
+    const ms = { '24h': 1, '1w': 7, '1m': 30 }[range] || 7;
+    return new Date(now - ms * 24 * 60 * 60 * 1000);
+  }
+
+  // Returns a sensible item cap for each range
+  function timeRangeCap(range) {
+    return { '24h': 50, '1w': 100, '1m': 200 }[range] || 100;
+  }
+
+  // Filter an array of items to those within the time range
+  // dateField: the property name holding an ISO date string
+  function filterByTimeRange(items, dateField, range) {
+    if (!range || range === 'all') return items;
+    const start = timeRangeToStart(range);
+    return items.filter(item => {
+      const d = item[dateField] ? new Date(item[dateField]) : null;
+      return d && d >= start;
+    });
+  }
+
   // Cache for KEV data
   let kevCache = null;
   let kevCacheTime = null;
@@ -235,8 +259,9 @@ const API = (() => {
     return fetchAllNews();
   }
 
-  // Fetch news filtered by source key
-  async function fetchNewsBySource(source = 'all', limit = 50) {
+  // Fetch news filtered by source key and time range
+  async function fetchNewsBySource(source = 'all', timeRange = '1w') {
+    const limit = timeRangeCap(timeRange);
     let items;
     if (source === 'all') {
       items = await fetchAllNews();
@@ -252,6 +277,7 @@ const API = (() => {
       console.log(`[API] Fetching news from ${feed.name} only...`);
       items = await fetchRSSWithFallbacks(feed);
     }
+    items = filterByTimeRange(items, 'published', timeRange);
     items.sort((a, b) => new Date(b.published) - new Date(a.published));
     return items.slice(0, limit);
   }
@@ -332,9 +358,10 @@ const API = (() => {
     };
   }
 
-  async function fetchCVEsFromCveList(limit = 30) {
+  async function fetchCVEsFromCveList(timeRange = '1w') {
+    const limit = timeRangeCap(timeRange);
+    const startDate = timeRangeToStart(timeRange);
     try {
-      // Get recent commits — each contains new CVE IDs
       const commitsResp = await Promise.race([
         fetch(`${CVELIST_COMMITS_API}?per_page=30`),
         timeout(8000)
@@ -342,11 +369,9 @@ const API = (() => {
       if (!commitsResp.ok) throw new Error(`GitHub commits API: ${commitsResp.status}`);
       const commits = await commitsResp.json();
 
-      // Extract only NEW CVE IDs from commit messages (skip "updated" ones)
       const cveIds = new Set();
       for (const c of commits) {
         const msg = c.commit?.message || '';
-        // Match "X new CVEs:  CVE-2026-1234, CVE-2026-5678"
         const newBlock = msg.match(/new CVEs?:\s*(CVE[\s\S]*?)(?:\n|$)/i);
         if (newBlock) {
           const ids = newBlock[1].match(/CVE-\d{4}-\d+/g) || [];
@@ -355,7 +380,6 @@ const API = (() => {
       }
       if (cveIds.size === 0) throw new Error('No CVE IDs found in commits');
 
-      // Fetch individual CVE JSON files (parallel, capped)
       const idsToFetch = [...cveIds].slice(0, Math.min(limit + 5, 35));
       console.log(`[API] cvelistV5: fetching ${idsToFetch.length} CVEs from ${cveIds.size} found`);
 
@@ -369,7 +393,8 @@ const API = (() => {
 
       const cves = results
         .filter(r => r.status === 'fulfilled' && r.value)
-        .map(r => r.value);
+        .map(r => r.value)
+        .filter(c => !c.published || new Date(c.published) >= startDate);
 
       cves.sort((a, b) => new Date(b.published) - new Date(a.published));
       console.log(`[API] cvelistV5: got ${cves.length} real-time CVEs`);
@@ -381,10 +406,10 @@ const API = (() => {
   }
 
   // ── GitHub Advisory Database ─────────────────────────────
-  // Free, no key, no CORS issues, ~1 day lag vs NVD's ~6 day lag
   const GITHUB_ADVISORY_API = 'https://api.github.com/advisories';
 
-  async function fetchGitHubAdvisories(limit = 30, severity = '') {
+  async function fetchGitHubAdvisories(timeRange = '1w', severity = '') {
+    const limit = timeRangeCap(timeRange);
     try {
       const params = new URLSearchParams({
         per_page: String(Math.min(limit, 100)),
@@ -406,28 +431,30 @@ const API = (() => {
       const data = await response.json();
       if (!Array.isArray(data) || data.length === 0) return null;
 
-      const mapped = data.map(adv => {
-        const v3 = adv.cvss_severities?.cvss_v3?.score;
-        const v4 = adv.cvss_severities?.cvss_v4?.score;
-        const score = (v3 && v3 > 0) ? v3 : (v4 && v4 > 0) ? v4 : 0;
-        const sevMap = { critical: 'CRITICAL', high: 'HIGH', medium: 'MEDIUM', low: 'LOW' };
-        const sev = sevMap[adv.severity] || 'NONE';
-        const pkg = adv.vulnerabilities?.[0]?.package;
-        return {
-          id: adv.cve_id || adv.ghsa_id,
-          description: adv.summary || 'No description',
-          published: adv.published_at,
-          modified: adv.updated_at,
-          cvss: { score, severity: sev, vector: adv.cvss_severities?.cvss_v3?.vector_string || '' },
-          references: adv.references || [],
-          cpe: pkg ? [`${pkg.ecosystem}:${pkg.name}`] : [],
-          link: adv.html_url,
-          source: 'github',
-          type: 'cve'
-        };
-      });
+      const startDate = timeRangeToStart(timeRange);
+      const mapped = data
+        .map(adv => {
+          const v3 = adv.cvss_severities?.cvss_v3?.score;
+          const v4 = adv.cvss_severities?.cvss_v4?.score;
+          const score = (v3 && v3 > 0) ? v3 : (v4 && v4 > 0) ? v4 : 0;
+          const sevMap = { critical: 'CRITICAL', high: 'HIGH', medium: 'MEDIUM', low: 'LOW' };
+          const sev = sevMap[adv.severity] || 'NONE';
+          const pkg = adv.vulnerabilities?.[0]?.package;
+          return {
+            id: adv.cve_id || adv.ghsa_id,
+            description: adv.summary || 'No description',
+            published: adv.published_at,
+            modified: adv.updated_at,
+            cvss: { score, severity: sev, vector: adv.cvss_severities?.cvss_v3?.vector_string || '' },
+            references: adv.references || [],
+            cpe: pkg ? [`${pkg.ecosystem}:${pkg.name}`] : [],
+            link: adv.html_url,
+            source: 'github',
+            type: 'cve'
+          };
+        })
+        .filter(c => !c.published || new Date(c.published) >= startDate);
 
-      // Newest first
       mapped.sort((a, b) => new Date(b.published) - new Date(a.published));
       console.log(`[API] GitHub Advisory DB returned ${mapped.length} advisories`);
       return mapped;
@@ -438,11 +465,11 @@ const API = (() => {
   }
 
   // Fetch CVEs from NVD API 2.0
-  async function fetchCVEsFromNVD(limit = 30, severity = '') {
+  async function fetchCVEsFromNVD(timeRange = '1w', severity = '') {
     try {
+      const limit = timeRangeCap(timeRange);
       const endDate = new Date();
-      const startDate = new Date();
-      startDate.setDate(startDate.getDate() - 7);
+      const startDate = timeRangeToStart(timeRange);
 
       const baseParams = new URLSearchParams();
       baseParams.append('pubStartDate', startDate.toISOString());
@@ -456,7 +483,7 @@ const API = (() => {
       if (!countResp.ok) throw new Error(`NVD API returned ${countResp.status}`);
       const countData = await countResp.json();
       const total = countData.totalResults || 0;
-      console.log(`[API] NVD: ${total} CVEs in last 7 days`);
+      console.log(`[API] NVD: ${total} CVEs in range ${timeRange}`);
 
       if (total === 0) return [];
 
@@ -511,9 +538,10 @@ const API = (() => {
   // ── CVE.org (MITRE) — Official CVE API ──────────────────
   const CVEORG_API = 'https://cveawg.mitre.org/api/cve';
 
-  async function fetchCVEsFromCVEOrg(limit = 30) {
+  async function fetchCVEsFromCVEOrg(timeRange = '1w') {
+    const limit = timeRangeCap(timeRange);
+    const startDate = timeRangeToStart(timeRange);
     try {
-      // CVE.org individual endpoint works; get IDs from cvelistV5 commits
       const commitsResp = await Promise.race([
         fetch(`${CVELIST_COMMITS_API}?per_page=15`),
         timeout(10000)
@@ -550,7 +578,8 @@ const API = (() => {
 
       const cves = results
         .filter(r => r.status === 'fulfilled' && r.value)
-        .map(r => r.value);
+        .map(r => r.value)
+        .filter(c => !c.published || new Date(c.published) >= startDate);
 
       cves.sort((a, b) => new Date(b.published) - new Date(a.published));
       console.log(`[API] CVE.org: got ${cves.length} CVEs`);
@@ -610,38 +639,38 @@ const API = (() => {
   }
 
   // Fetch CVEs from a specific source
-  async function fetchCVEsBySource(source = 'auto', limit = 30, severity = '') {
+  async function fetchCVEsBySource(source = 'auto', timeRange = '1w', severity = '') {
     switch (source) {
       case 'cvelist':
-        return (await fetchCVEsFromCveList(limit)) || [];
+        return (await fetchCVEsFromCveList(timeRange)) || [];
       case 'github':
-        return (await fetchGitHubAdvisories(limit, severity)) || [];
+        return (await fetchGitHubAdvisories(timeRange, severity)) || [];
       case 'nvd':
-        return (await fetchCVEsFromNVD(limit, severity)) || [];
+        return (await fetchCVEsFromNVD(timeRange, severity)) || [];
       case 'cveorg':
-        return (await fetchCVEsFromCVEOrg(limit)) || [];
+        return (await fetchCVEsFromCVEOrg(timeRange)) || [];
       case 'all':
-        return fetchAllCVESources(limit, severity);
+        return fetchAllCVESources(timeRange, severity);
       case 'auto':
       default:
-        return fetchCVEs(limit, severity);
+        return fetchCVEs(timeRange, severity);
     }
   }
 
   // Fetch from ALL sources, merge, deduplicate, newest first
-  async function fetchAllCVESources(limit = 30, severity = '') {
+  async function fetchAllCVESources(timeRange = '1w', severity = '') {
+    const limit = timeRangeCap(timeRange);
     console.log('[API] Fetching from ALL CVE sources...');
     const [cvelist, github, nvd, cveorg] = await Promise.allSettled([
-      fetchCVEsFromCveList(limit),
-      fetchGitHubAdvisories(limit, severity),
-      fetchCVEsFromNVD(limit, severity),
-      fetchCVEsFromCVEOrg(limit)
+      fetchCVEsFromCveList(timeRange),
+      fetchGitHubAdvisories(timeRange, severity),
+      fetchCVEsFromNVD(timeRange, severity),
+      fetchCVEsFromCVEOrg(timeRange)
     ]);
 
     const all = [];
     const seen = new Set();
 
-    // Helper to add unique CVEs
     function addUnique(arr, src) {
       if (!Array.isArray(arr)) return;
       for (const cve of arr) {
@@ -658,41 +687,36 @@ const API = (() => {
     addUnique(nvd.value, 'NVD');
     addUnique(cveorg.value, 'CVE.org');
 
-    // Sort newest first
     all.sort((a, b) => new Date(b.published) - new Date(a.published));
 
-    // Apply severity filter
     let filtered = all;
     if (severity) filtered = all.filter(c => c.cvss?.severity === severity.toUpperCase());
 
     console.log(`[API] All sources merged: ${all.length} unique CVEs (${cvelist.value?.length || 0} CVEProject + ${github.value?.length || 0} GitHub + ${nvd.value?.length || 0} NVD + ${cveorg.value?.length || 0} CVE.org)`);
 
-    // Enrich with EPSS scores
     const result = filtered.slice(0, limit);
     await enrichWithEPSS(result);
     return result;
   }
 
   // Fetch CVEs — cvelistV5 (real-time) → GitHub Advisory (~1d) → NVD (~6d) → fallback
-  async function fetchCVEs(limit = 30, severity = '') {
-    // Try real-time CVEProject source first (0 lag)
+  async function fetchCVEs(timeRange = '1w', severity = '') {
+    const limit = timeRangeCap(timeRange);
     if (!severity) {
-      const realtime = await fetchCVEsFromCveList(limit);
+      const realtime = await fetchCVEsFromCveList(timeRange);
       if (realtime) {
         console.log(`[API] Using real-time cvelistV5 data (${realtime.length} CVEs)`);
         return realtime.slice(0, limit);
       }
     }
 
-    // GitHub Advisory (~1 day lag)
-    const ghAdvisories = await fetchGitHubAdvisories(limit, severity);
+    const ghAdvisories = await fetchGitHubAdvisories(timeRange, severity);
     if (Array.isArray(ghAdvisories) && ghAdvisories.length >= 5) {
       console.log(`[API] Using GitHub Advisory data (${ghAdvisories.length} entries)`);
       return ghAdvisories.slice(0, limit);
     }
 
-    // NVD (~6 day lag)
-    const live = await fetchCVEsFromNVD(limit, severity);
+    const live = await fetchCVEsFromNVD(timeRange, severity);
     if (Array.isArray(live) && live.length > 0) {
       console.log(`[API] Using live NVD data (${live.length} CVEs)`);
       return live.slice(0, limit);
@@ -701,17 +725,18 @@ const API = (() => {
     console.log('[API] Live sources unavailable, using fallback CVE data');
     let fallback = getFallbackCVEs();
     if (severity) fallback = fallback.filter(c => c.cvss?.severity === severity.toUpperCase());
+    fallback = filterByTimeRange(fallback, 'published', timeRange);
     fallback.sort((a, b) => new Date(b.published) - new Date(a.published));
     return fallback.slice(0, limit);
   }
 
   // Dedicated live CVE fetch — always bypasses cache, used for panel-only refresh
-  async function fetchCVEsOnly() {
-    const rt = await fetchCVEsFromCveList(30);
+  async function fetchCVEsOnly(timeRange = '1w') {
+    const rt = await fetchCVEsFromCveList(timeRange);
     if (rt) return rt;
-    const gh = await fetchGitHubAdvisories(30);
+    const gh = await fetchGitHubAdvisories(timeRange);
     if (Array.isArray(gh) && gh.length >= 5) return gh;
-    return fetchCVEsFromNVD(30);
+    return fetchCVEsFromNVD(timeRange);
   }
   
   // Fallback CVEs - actually recent from NVD (verified latest - March 7, 2026)
@@ -1011,7 +1036,8 @@ const API = (() => {
   }
 
   // ── Unified malware/threat source fetcher ─────────────────
-  async function fetchAllMalwareSources(limit = 30) {
+  async function fetchAllMalwareSources(timeRange = '1w') {
+    const limit = timeRangeCap(timeRange);
     const results = await Promise.allSettled([
       fetchLiveRansomware().then(r => r || getMockRansomware()),
       fetchURLhaus(limit),
@@ -1031,6 +1057,9 @@ const API = (() => {
       }
     });
 
+    // Filter by time range
+    merged = filterByTimeRange(merged, 'discovered', timeRange);
+
     // Sort by discovered date newest first
     merged.sort((a, b) => new Date(b.discovered || 0) - new Date(a.discovered || 0));
     const final = merged.slice(0, limit);
@@ -1038,14 +1067,18 @@ const API = (() => {
     return final;
   }
 
-  async function fetchMalwareBySource(source = 'all', limit = 30) {
+  async function fetchMalwareBySource(source = 'all', timeRange = '1w') {
+    const limit = timeRangeCap(timeRange);
     switch (source) {
-      case 'ransomware-victims': return (await fetchLiveRansomware()) || getMockRansomware();
-      case 'urlhaus': return fetchURLhaus(limit);
-      case 'threatfox': return fetchThreatFox(limit);
-      case 'inquest': return fetchInQuestIOCs(limit);
-      case 'hibp': return fetchHIBPBreaches(limit);
-      case 'all': return fetchAllMalwareSources(limit);
+      case 'ransomware-victims': {
+        const items = (await fetchLiveRansomware()) || getMockRansomware();
+        return filterByTimeRange(items, 'discovered', timeRange).slice(0, limit);
+      }
+      case 'urlhaus': return filterByTimeRange(await fetchURLhaus(limit), 'discovered', timeRange).slice(0, limit);
+      case 'threatfox': return filterByTimeRange(await fetchThreatFox(limit), 'discovered', timeRange).slice(0, limit);
+      case 'inquest': return filterByTimeRange(await fetchInQuestIOCs(limit), 'discovered', timeRange).slice(0, limit);
+      case 'hibp': return filterByTimeRange(await fetchHIBPBreaches(limit), 'discovered', timeRange).slice(0, limit);
+      case 'all': return fetchAllMalwareSources(timeRange);
       default: return fetchRansomware();
     }
   }
@@ -1179,7 +1212,8 @@ const API = (() => {
   }
 
   // ── APT source dispatcher ─────────────────────────────
-  async function fetchAllAPTSources(limit = 50) {
+  async function fetchAllAPTSources(timeRange = '1w') {
+    const limit = timeRangeCap(timeRange);
     const [misp, rss] = await Promise.allSettled([
       fetchMISPGalaxy(limit),
       fetchAPTNews()
@@ -1192,14 +1226,15 @@ const API = (() => {
     return merged.slice(0, limit);
   }
 
-  async function fetchAPTBySource(source = 'all', limit = 50) {
+  async function fetchAPTBySource(source = 'all', timeRange = '1w') {
+    const limit = timeRangeCap(timeRange);
     switch (source) {
       case 'misp':        return fetchMISPGalaxy(limit);
       case 'static':      return getMockAPT();
       case 'mandiant':    return fetchAPTNews('mandiant');
       case 'crowdstrike': return fetchAPTNews('crowdstrike');
       case 'securelist':  return fetchAPTNews('securelist');
-      case 'all':         return fetchAllAPTSources(limit);
+      case 'all':         return fetchAllAPTSources(timeRange);
       default:            return getMockAPT();
     }
   }
@@ -1268,9 +1303,16 @@ const API = (() => {
   }
 
   // Main entry: load all data
-  async function loadAllData() {
-    const CACHE_KEY = 'cybervulndb_data_v8';
-    const CACHE_TS_KEY = 'cybervulndb_ts_v8';
+  async function loadAllData(timeRanges = {}) {
+    const cveRange     = timeRanges.cve      || '1w';
+    const malwareRange = timeRanges.malware  || '1w';
+    const newsRange    = timeRanges.news     || '1w';
+    const aptRange     = timeRanges.apt      || '1w';
+
+    // Include time range in cache key so changing range busts cache
+    const rangeKey = `${cveRange}-${malwareRange}-${newsRange}-${aptRange}`;
+    const CACHE_KEY = `cybervulndb_data_v8_${rangeKey}`;
+    const CACHE_TS_KEY = `cybervulndb_ts_v8_${rangeKey}`;
     const CACHE_MAX_AGE = 15 * 60 * 1000; // 15 minutes
 
     const cachedTs = Utils.storageGet(CACHE_TS_KEY);
@@ -1282,27 +1324,24 @@ const API = (() => {
       }
     }
 
-    console.log('[API] Loading fresh data...');
+    console.log('[API] Loading fresh data...', { cveRange, malwareRange, newsRange, aptRange });
     
-    // Load data with resilient fallbacks — all live sources in parallel
-    // Wrap slow sources with overall timeouts to prevent blocking
     const [cves, ransomware, news, apt] = await Promise.all([
-      fetchAllCVESources(50),
+      fetchAllCVESources(cveRange),
       Promise.race([
-        fetchAllMalwareSources(50),
+        fetchAllMalwareSources(malwareRange),
         timeout(30000).catch(() => getMockRansomware())
       ]),
       Promise.race([
-        fetchAllNews().catch(() => []),
+        fetchNewsBySource('all', newsRange).catch(() => []),
         timeout(20000).catch(() => [])
       ]),
       Promise.race([
-        fetchAllAPTSources(50),
+        fetchAllAPTSources(aptRange),
         timeout(25000).catch(() => getMockAPT())
       ])
     ]);
 
-    // EPSS enrichment (fetchAllCVESources already enriches, but ensure coverage)
     await enrichWithEPSS(cves);
 
     const data = { cves, ransomware, apt, news };

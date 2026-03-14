@@ -9,13 +9,13 @@ A terminal-styled cybersecurity intelligence dashboard that aggregates live CVEs
 ## Screenshots
 
 ### Dashboard Overview
-![Dashboard Overview](design-v12-overview.png)
+![Dashboard Overview](images/design-v12-overview.png)
 
 ### APT Groups Tab
-![APT Groups](design-v12-apt-tab.png)
+![APT Groups](images/design-v12-apt-tab.png)
 
 ### Map Popup
-![Map Popup](design-v12-popup.png)
+![Map Popup](images/design-v12-popup.png)
 
 ---
 

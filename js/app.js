@@ -89,12 +89,22 @@
   }
 
   // ── Core load + render cycle ───────────────────────────────
+  // Helper — read current time range from a panel selector
+  function getTimeRange(panelId) {
+    return document.getElementById(`${panelId}-time-filter`)?.value || '1w';
+  }
+
   async function loadAndRender() {
     let data = { cves: [], ransomware: [], apt: [], news: [] };
     let sourceOk = false;
 
     try {
-      data = await API.loadAllData();
+      data = await API.loadAllData({
+        cve:     getTimeRange('cve'),
+        malware: getTimeRange('malware'),
+        news:    getTimeRange('news'),
+        apt:     getTimeRange('apt')
+      });
       sourceOk = true;
     } catch (err) {
       console.error('[App] Failed to load data:', err);
@@ -107,16 +117,11 @@
     // Clear existing markers before re-rendering
     MapManager.clearMarkers();
 
-    // Render all panels (apply count limits from UI)
-    const cveLimit = parseInt(document.getElementById('cve-count-filter')?.value) || 50;
-    const malwareLimit = parseInt(document.getElementById('malware-count-filter')?.value) || 50;
-    const aptLimit = parseInt(document.getElementById('apt-count-filter')?.value) || 50;
-    const newsLimit = parseInt(document.getElementById('news-count-filter')?.value) || 50;
-    
-    renderCVEs(filterForSearch(data.cves.slice(0, cveLimit), 'cve'));
-    renderRansomware(filterForSearch(data.ransomware.slice(0, malwareLimit), 'ransomware'));
-    renderAPT(filterForSearch(data.apt.slice(0, aptLimit), 'apt'));
-    renderNews(filterForSearch(data.news.slice(0, newsLimit), 'news'));
+    // Render all panels (data is already time-range filtered from loadAndRender)
+    renderCVEs(filterForSearch(data.cves, 'cve'));
+    renderRansomware(filterForSearch(data.ransomware, 'ransomware'));
+    renderAPT(filterForSearch(data.apt, 'apt'));
+    renderNews(filterForSearch(data.news, 'news'));
 
     // Update stats bar
     updateStatsBar(data);
@@ -156,7 +161,8 @@
 
   async function refreshNewsPanel() {
     try {
-      const news = await API.fetchNewsOnly();
+      const timeRange = getTimeRange('news');
+      const news = await API.fetchNewsBySource('all', timeRange);
       if (news.length > 0) {
         if (window.cyberData) window.cyberData.news = news;
         newsLastFetchTime = Date.now();
@@ -197,7 +203,8 @@
 
   async function refreshCVEPanel() {
     try {
-      const fresh = await API.fetchCVEsBySource(currentCVESource, 30, currentSeverityFilter);
+      const timeRange = getTimeRange('cve');
+      const fresh = await API.fetchCVEsBySource(currentCVESource, timeRange, currentSeverityFilter);
       if (!fresh || !fresh.length) return;
 
       // Enrich with EPSS
@@ -870,25 +877,26 @@
       });
     }
 
-    // CVE count selector
-    const cveCountFilter = document.getElementById('cve-count-filter');
-    if (cveCountFilter) {
-      cveCountFilter.addEventListener('change', async () => {
+    // CVE time range selector
+    const cveTimeFilter = document.getElementById('cve-time-filter');
+    if (cveTimeFilter) {
+      cveTimeFilter.addEventListener('change', async () => {
         await refetchCVESource();
       });
     }
 
+    // News source selector
     const newsSourceFilter = document.getElementById('news-source-filter');
     if (newsSourceFilter) {
       newsSourceFilter.addEventListener('change', async () => {
         const source = newsSourceFilter.value;
-        const limit = parseInt(document.getElementById('news-count-filter')?.value) || 50;
+        const timeRange = getTimeRange('news');
         const container = document.getElementById('news-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading news...</div></div>';
         }
         try {
-          const items = await API.fetchNewsBySource(source, limit);
+          const items = await API.fetchNewsBySource(source, timeRange);
           if (window.cyberData) window.cyberData.news = items;
           renderNews(filterForSearch(items, 'news'));
           const badge = document.getElementById('news-count-badge');
@@ -900,18 +908,18 @@
       });
     }
 
-    // News count selector
-    const newsCountFilter = document.getElementById('news-count-filter');
-    if (newsCountFilter) {
-      newsCountFilter.addEventListener('change', async () => {
+    // News time range selector
+    const newsTimeFilter = document.getElementById('news-time-filter');
+    if (newsTimeFilter) {
+      newsTimeFilter.addEventListener('change', async () => {
         const source = document.getElementById('news-source-filter')?.value || 'all';
-        const limit = parseInt(newsCountFilter.value) || 50;
+        const timeRange = newsTimeFilter.value;
         const container = document.getElementById('news-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading news...</div></div>';
         }
         try {
-          const items = await API.fetchNewsBySource(source, limit);
+          const items = await API.fetchNewsBySource(source, timeRange);
           if (window.cyberData) window.cyberData.news = items;
           renderNews(filterForSearch(items, 'news'));
           const badge = document.getElementById('news-count-badge');
@@ -928,13 +936,13 @@
     if (malwareFilter) {
       malwareFilter.addEventListener('change', async () => {
         const source = malwareFilter.value;
-        const limit = parseInt(document.getElementById('malware-count-filter')?.value) || 50;
+        const timeRange = getTimeRange('malware');
         const container = document.getElementById('ransomware-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading from source...</div></div>';
         }
         try {
-          const items = await API.fetchMalwareBySource(source, limit);
+          const items = await API.fetchMalwareBySource(source, timeRange);
           if (window.cyberData) window.cyberData.ransomware = items;
           renderRansomware(filterForSearch(items, 'ransomware'));
           UI.showToast(`Loaded ${items.length} threats from ${source === 'all' ? 'all sources' : source}`, 'info');
@@ -944,18 +952,18 @@
       });
     }
 
-    // Malware count selector
-    const malwareCountFilter = document.getElementById('malware-count-filter');
-    if (malwareCountFilter) {
-      malwareCountFilter.addEventListener('change', async () => {
+    // Malware time range selector
+    const malwareTimeFilter = document.getElementById('malware-time-filter');
+    if (malwareTimeFilter) {
+      malwareTimeFilter.addEventListener('change', async () => {
         const source = document.getElementById('malware-source-filter')?.value || 'all';
-        const limit = parseInt(malwareCountFilter.value) || 50;
+        const timeRange = malwareTimeFilter.value;
         const container = document.getElementById('ransomware-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading from source...</div></div>';
         }
         try {
-          const items = await API.fetchMalwareBySource(source, limit);
+          const items = await API.fetchMalwareBySource(source, timeRange);
           if (window.cyberData) window.cyberData.ransomware = items;
           renderRansomware(filterForSearch(items, 'ransomware'));
           UI.showToast(`Loaded ${items.length} threats`, 'info');
@@ -970,13 +978,13 @@
     if (aptFilter) {
       aptFilter.addEventListener('change', async () => {
         const source = aptFilter.value;
-        const limit = parseInt(document.getElementById('apt-count-filter')?.value) || 50;
+        const timeRange = getTimeRange('apt');
         const container = document.getElementById('apt-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading APT data...</div></div>';
         }
         try {
-          const items = await API.fetchAPTBySource(source, limit);
+          const items = await API.fetchAPTBySource(source, timeRange);
           if (window.cyberData) window.cyberData.apt = items;
           renderAPT(filterForSearch(items, 'apt'));
           UI.showToast(`Loaded ${items.length} APT groups from ${source === 'all' ? 'all sources' : source}`, 'info');
@@ -986,18 +994,18 @@
       });
     }
 
-    // APT count selector
-    const aptCountFilter = document.getElementById('apt-count-filter');
-    if (aptCountFilter) {
-      aptCountFilter.addEventListener('change', async () => {
+    // APT time range selector
+    const aptTimeFilter = document.getElementById('apt-time-filter');
+    if (aptTimeFilter) {
+      aptTimeFilter.addEventListener('change', async () => {
         const source = document.getElementById('apt-source-filter')?.value || 'all';
-        const limit = parseInt(aptCountFilter.value) || 50;
+        const timeRange = aptTimeFilter.value;
         const container = document.getElementById('apt-list');
         if (container) {
           container.innerHTML = '<div class="empty-state"><div class="empty-state-icon loading-spin">⟳</div><div class="empty-state-text">Loading APT data...</div></div>';
         }
         try {
-          const items = await API.fetchAPTBySource(source, limit);
+          const items = await API.fetchAPTBySource(source, timeRange);
           if (window.cyberData) window.cyberData.apt = items;
           renderAPT(filterForSearch(items, 'apt'));
           UI.showToast(`Loaded ${items.length} APT groups`, 'info');
@@ -1016,8 +1024,8 @@
     }
 
     try {
-      const limit = parseInt(document.getElementById('cve-count-filter')?.value) || 50;
-      const cves = await API.fetchCVEsBySource(currentCVESource, limit, currentSeverityFilter);
+      const timeRange = getTimeRange('cve');
+      const cves = await API.fetchCVEsBySource(currentCVESource, timeRange, currentSeverityFilter);
       if (window.cyberData) window.cyberData.cves = cves;
       renderCVEs(filterForSearch(cves, 'cve'));
       cveLastFetchTime = Date.now();
@@ -1049,16 +1057,12 @@
       const data = window.cyberData || { cves: [], ransomware: [], apt: [], news: [] };
 
       if (!currentSearchQuery) {
-        // Clear search — restore all panels with current limits
-        const cveLimit = parseInt(document.getElementById('cve-count-filter')?.value) || 50;
-        const malwareLimit = parseInt(document.getElementById('malware-count-filter')?.value) || 50;
-        const aptLimit = parseInt(document.getElementById('apt-count-filter')?.value) || 50;
-        const newsLimit = parseInt(document.getElementById('news-count-filter')?.value) || 50;
+        // Clear search — restore all panels (data already time-filtered in window.cyberData)
         MapManager.clearMarkers();
-        renderCVEs(data.cves.slice(0, cveLimit));
-        renderRansomware(data.ransomware.slice(0, malwareLimit));
-        renderAPT(data.apt.slice(0, aptLimit));
-        renderNews(data.news.slice(0, newsLimit));
+        renderCVEs(data.cves);
+        renderRansomware(data.ransomware);
+        renderAPT(data.apt);
+        renderNews(data.news);
         return;
       }
 
