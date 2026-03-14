@@ -725,7 +725,7 @@ const API = (() => {
     console.log('[API] Live sources unavailable, using fallback CVE data');
     let fallback = getFallbackCVEs();
     if (severity) fallback = fallback.filter(c => c.cvss?.severity === severity.toUpperCase());
-    fallback = filterByTimeRange(fallback, 'published', timeRange);
+    // Don't filter fallback by time range — it's last-resort data when all live sources fail
     fallback.sort((a, b) => new Date(b.published) - new Date(a.published));
     return fallback.slice(0, limit);
   }
@@ -1069,17 +1069,21 @@ const API = (() => {
 
   async function fetchMalwareBySource(source = 'all', timeRange = '1w') {
     const limit = timeRangeCap(timeRange);
+    const sortAndSlice = (items) => {
+      items.sort((a, b) => new Date(b.discovered || 0) - new Date(a.discovered || 0));
+      return items.slice(0, limit);
+    };
     switch (source) {
       case 'ransomware-victims': {
         const items = (await fetchLiveRansomware()) || getMockRansomware();
-        return filterByTimeRange(items, 'discovered', timeRange).slice(0, limit);
+        return sortAndSlice(filterByTimeRange(items, 'discovered', timeRange));
       }
-      case 'urlhaus': return filterByTimeRange(await fetchURLhaus(limit), 'discovered', timeRange).slice(0, limit);
-      case 'threatfox': return filterByTimeRange(await fetchThreatFox(limit), 'discovered', timeRange).slice(0, limit);
-      case 'inquest': return filterByTimeRange(await fetchInQuestIOCs(limit), 'discovered', timeRange).slice(0, limit);
-      case 'hibp': return filterByTimeRange(await fetchHIBPBreaches(limit), 'discovered', timeRange).slice(0, limit);
+      case 'urlhaus': return sortAndSlice(filterByTimeRange(await fetchURLhaus(limit), 'discovered', timeRange));
+      case 'threatfox': return sortAndSlice(filterByTimeRange(await fetchThreatFox(limit), 'discovered', timeRange));
+      case 'inquest': return sortAndSlice(filterByTimeRange(await fetchInQuestIOCs(limit), 'discovered', timeRange));
+      case 'hibp': return sortAndSlice(filterByTimeRange(await fetchHIBPBreaches(limit), 'discovered', timeRange));
       case 'all': return fetchAllMalwareSources(timeRange);
-      default: return fetchRansomware();
+      default: return fetchMalwareBySource('ransomware-victims', timeRange);
     }
   }
 
@@ -1311,7 +1315,7 @@ const API = (() => {
 
     // Include time range in cache key so changing range busts cache
     const rangeKey = `${cveRange}-${malwareRange}-${newsRange}-${aptRange}`;
-    const CACHE_KEY = `cybervulndb_data_v8_${rangeKey}`;
+    const CACHE_KEY = `cybervulndb_data_v9_${rangeKey}`;
     const CACHE_TS_KEY = `cybervulndb_ts_v8_${rangeKey}`;
     const CACHE_MAX_AGE = 15 * 60 * 1000; // 15 minutes
 
